@@ -440,3 +440,40 @@ test('caller cancellation rejects an active WS stream and closes it without SSE'
   await assertClosed(await gateway.nextCreate())
   assert.equal(gateway.posts.length, 0)
 })
+
+for (const mode of ['websocket', 'sse', 'fallback'] as const) {
+  test(`Responses reasoning and nested fields are preserved over ${mode}`, { timeout: CASE_TIMEOUT_MS }, async t => {
+    const gateway = await fixture(t, {
+      upgrade: mode === 'fallback' ? 404 : 'accept',
+      onCreate: request => {
+        request.socket.send(JSON.stringify(created(String(request.payload.model))))
+        request.socket.send(JSON.stringify(completed(String(request.payload.model))))
+      },
+    })
+    const { client } = transport(t, gateway.baseURL, { mode: mode === 'sse' ? 'sse' : 'auto' })
+    const payload = {
+      model: 'gpt-fixture', input: 'input:gpt-fixture', stream: true, background: false,
+      reasoning: { effort: 'xhigh', summary: 'auto' }, include: ['reasoning.encrypted_content'],
+      text: { format: { type: 'text' } }, metadata: { trace: 'reasoning-wire-fixture' },
+    }
+    const response = await client.fetch(`${gateway.baseURL}/responses`, {
+      method: 'POST', headers: { authorization: 'Bearer fixture-key', 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    assert.equal(response.status, 200)
+    await response.text()
+    if (mode === 'websocket') {
+      const sent = await gateway.nextCreate()
+      const { stream: _stream, background: _background, ...body } = payload
+      assert.deepEqual(sent.payload, { ...body, type: 'response.create' })
+      assert.equal(Object.hasOwn(sent.payload, 'reasoning_effort'), false)
+      assert.equal(gateway.posts.length, 0)
+      await assertClosed(sent)
+    } else {
+      assert.deepEqual(gateway.posts[0]!.payload, payload)
+      assert.equal(gateway.posts.length, 1)
+      assert.equal(gateway.upgrades.length, mode === 'fallback' ? 1 : 0)
+      if (mode === 'fallback') await gateway.upgrades[0]!.closed
+    }
+  })
+}

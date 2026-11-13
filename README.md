@@ -32,6 +32,7 @@ providers:
     baseURL: https://gateway.example.invalid/v1
     apiKeyEnv: GATEWAY_API_KEY
     transport: auto
+    # reasoning: high  # Optional route default when a request selects no effort.
     discover: true
     discovery:
       contextWindow: 500000
@@ -49,6 +50,10 @@ providers:
 ```
 
 The example is a declaration template, not a working endpoint. Store the key through the existing credential service, not in the bundle. `transport: sse` disables WS for that route. Only `gpt-` or `openai/gpt-` model ids are accepted; non-GPT ids, duplicate capabilities and unsupported configuration fields fail before route registration. Model effort names must match the gateway's actual Responses capabilities.
+
+`reasoning` optionally supplies a route default only when the request does not select an effort; an explicit request overrides it. Omit it to preserve the existing provider-default behavior: `reasoningEfforts` lists capabilities but does not select its first entry. A default must be supported by every explicit model and, when discovery is enabled, by its metadata template. Invalid defaults fail before route registration.
+
+Responses carries the selected effort in `reasoning.effort`, including the WS `response.create` event; no `reasoning_effort` alias is synthesized. The existing model declarations do not offer `off` for reasoning-capable models. On a declaration without reasoning capabilities, `off` omits the effort rather than forcing an upstream `none` or promising that the server disables thinking.
 
 With `discover: true`, the adapter also reads `${baseURL}/models` and appends every GPT text id that `models` does not list; image, audio, embedding and similar non-text ids are ignored. Explicit entries win and override metadata; `discovery.exclude` names ids the gateway lists but this route should not offer. The gateway model list carries no context-window or reasoning-level metadata, so `discovery` supplies defaults for discovered ids; add an explicit entry when a new model differs. Discovery is cached for `ttlMs`, a failure keeps the explicit models and logs a safe warning, and discovery is off by default.
 
@@ -80,7 +85,7 @@ Tests use real loopback HTTP and WS listeners with dynamically allocated ports a
 
 ## Model experience
 
-The plugin adds no system prompt, tool definition or user message. DSH and pi-ai continue to serialize history, images, thinking options and tool calls. WS and SSE feed the same Responses parser; usage precedes the terminal result. Moving a conversation to a newly registered route can discard provider-native replay metadata from the old adapter and change cache hits; history is not migrated or deleted. WS does not guarantee reduced token billing or lower latency.
+The plugin adds no system prompt, tool definition or user message. DSH and pi-ai continue to serialize history, images, thinking options and tool calls. WS and SSE feed the same Responses parser; usage precedes the terminal result. Moving a conversation to a newly registered route can discard provider-native replay metadata from the old adapter and change cache hits; history is not migrated or deleted. WS does not guarantee reduced token billing or lower latency. A configured reasoning default selects the same upstream parameter as an explicit effort and can affect token usage and latency.
 
 ## Known limitations
 

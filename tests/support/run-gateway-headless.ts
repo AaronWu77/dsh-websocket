@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import type { IncomingMessage } from 'node:http'
 import type { Socket } from 'node:net'
-import { access, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { access, glob, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
@@ -161,8 +161,10 @@ for (const mode of ['websocket', 'fallback'] as const) {
   const started = performance.now()
   try {
     const overlay = join(root, 'gateway-overlay.json')
+    const sessionRoot = join(root, 'recorded-sessions')
     await writeFile(overlay, JSON.stringify([
       { id: 'credentials', disabled: false, config: { dshHome: root, watch: false } },
+      { id: 'session-persistence-jsonl', config: { root: sessionRoot, compression: 'none' } },
       { id: 'llm-deepseek', disabled: true },
       { id: 'llm-deepseek-account', disabled: true },
       { id: 'agent-default-model', config: { provider: 'fixture-ws', model: 'gpt-fixture' } },
@@ -170,10 +172,10 @@ for (const mode of ['websocket', 'fallback'] as const) {
         insert: [{
           id: 'gpt-gateway-built-fixture', name: plugin,
           config: { providers: { 'fixture-ws': {
-            baseURL: gateway.baseURL, apiKeyEnv: 'FIXTURE_GATEWAY_KEY', transport: 'auto',
+            baseURL: gateway.baseURL, apiKeyEnv: 'FIXTURE_GATEWAY_KEY', transport: 'auto', reasoning: 'high',
             websocketConnectTimeoutMs: 3_000, closeTimeoutMs: 200, streamIdleTimeoutMs: 5_000,
             retryPolicy: { mode: 'normal', maxRetries: 0 },
-            models: [{ id: 'gpt-fixture', contextWindow: 128_000, maxTokens: 1_024 }],
+            models: [{ id: 'gpt-fixture', contextWindow: 128_000, maxTokens: 1_024, reasoningEfforts: ['high', 'xhigh'] }],
           } } },
         }],
       },
@@ -184,14 +186,36 @@ for (const mode of ['websocket', 'fallback'] as const) {
     const payloads = mode === 'websocket' ? gateway.sent : gateway.posted
     assert.ok(payloads.some(payload => JSON.stringify(payload.input).includes(TASK)), 'the actual Headless task reached the gateway')
     assert.ok(payloads.every(payload => payload.model === 'gpt-fixture'))
+    for (const payload of payloads) {
+      assert.deepEqual(payload.reasoning, { effort: 'high', summary: 'auto' })
+      assert.deepEqual(payload.include, ['reasoning.encrypted_content'])
+      assert.equal(Object.hasOwn(payload, 'reasoning_effort'), false)
+    }
     if (mode === 'websocket') assert.equal(gateway.posted.length, 0)
     else {
       assert.equal(gateway.sent.length, 0)
       assert.equal(gateway.posted.length, gateway.upgrades.length)
     }
+    let recordedReasoningHeaders = 0
+    for await (const relative of glob('**/session*.jsonl', { cwd: sessionRoot })) {
+      const text = await readFile(join(sessionRoot, relative), 'utf8')
+      for (const line of text.split('\n')) {
+        if (line.trim().length === 0) continue
+        const event = jsonObject(JSON.parse(line))
+        if (event.type !== 'request/header') continue
+        const header = jsonObject(jsonObject(event.data).header)
+        const config = jsonObject(header.config)
+        if (config.provider !== 'fixture-ws') continue
+        assert.equal(config.model, 'gpt-fixture')
+        assert.equal(config.reasoningEffort, 'high')
+        assert.equal(jsonObject(header.adapterDefaults).reasoningEffort, true)
+        recordedReasoningHeaders++
+      }
+    }
+    assert.ok(recordedReasoningHeaders > 0, 'the resolved reasoning default is recorded in the real Session request header')
     await gateway.waitClosed()
     console.log(JSON.stringify({ check: 'built-gateway-real-headless', mode, naturalExit: true, websocketUpgrades: gateway.upgrades.length,
-      wsRequests: gateway.sent.length, sseRequests: gateway.posted.length, elapsedMs: Math.round(performance.now() - started) }))
+      wsRequests: gateway.sent.length, sseRequests: gateway.posted.length, recordedReasoningHeaders, elapsedMs: Math.round(performance.now() - started) }))
   } finally {
     await gateway.dispose()
     const target = resolve(root)

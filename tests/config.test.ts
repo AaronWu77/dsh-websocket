@@ -33,6 +33,8 @@ test('schema defaults retain auto transport and the existing finite retry policy
   const route = routes.get('fixture-ws')
   assert.ok(route)
   assert.equal(route.config.transport, 'auto')
+  assert.equal(route.config.reasoning, undefined)
+  assert.equal(route.profile.reasoning, undefined)
   assert.equal(route.config.websocketConnectTimeoutMs, 10_000)
   assert.equal(route.config.closeTimeoutMs, 2_000)
   assert.equal(route.config.fallbackAfterFailures, 5)
@@ -124,4 +126,41 @@ test('unsupported model fields are rejected instead of discarding capability set
   const raw = declaration()
   Object.assign(raw.providers['fixture-ws'].models[0]!, { reasoningEffort: 'high' })
   assert.throws(() => resolveRoutes(Config(raw)), invalidConfig)
+})
+
+test('an optional reasoning default is retained only when every adopted model supports it', () => {
+  for (const reasoning of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
+    const raw = declaration()
+    Object.assign(raw.providers['fixture-ws'], { reasoning })
+    Object.assign(raw.providers['fixture-ws'].models[0]!, { reasoningEfforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] })
+    const route = resolveRoutes(Config(raw)).get('fixture-ws')
+    assert.equal(route?.profile.reasoning, reasoning)
+    raw.providers['fixture-ws'].models.push({ id: 'gpt-no-reasoning', contextWindow: 32_000, maxTokens: 512 })
+    assert.throws(() => resolveRoutes(Config(raw)), invalidConfig)
+  }
+})
+
+test('reasoning defaults validate the enabled discovery template but ignore an unused template', () => {
+  const raw = declaration()
+  Object.assign(raw.providers['fixture-ws'], { reasoning: 'xhigh', discover: true, discovery: { reasoningEfforts: ['high'] } })
+  Object.assign(raw.providers['fixture-ws'].models[0]!, { reasoningEfforts: ['high', 'xhigh'] })
+  assert.throws(() => resolveRoutes(Config(raw)), invalidConfig)
+  Object.assign(raw.providers['fixture-ws'], { discovery: { reasoningEfforts: ['high', 'xhigh'] } })
+  assert.equal(resolveRoutes(Config(raw)).get('fixture-ws')?.profile.reasoning, 'xhigh')
+  Object.assign(raw.providers['fixture-ws'], { discover: false, discovery: { reasoningEfforts: ['high'] } })
+  assert.equal(resolveRoutes(Config(raw)).get('fixture-ws')?.profile.reasoning, 'xhigh')
+})
+
+test('off does not add a reasoning capability to a model that does not advertise one', () => {
+  const raw = declaration()
+  Object.assign(raw.providers['fixture-ws'], { reasoning: 'off' })
+  assert.equal(resolveRoutes(Config(raw)).get('fixture-ws')?.profile.reasoning, 'off')
+  Object.assign(raw.providers['fixture-ws'].models[0]!, { reasoningEfforts: ['high'] })
+  assert.throws(() => resolveRoutes(Config(raw)), invalidConfig)
+})
+
+test('unknown reasoning defaults fail schema validation', () => {
+  const raw = declaration()
+  Object.assign(raw.providers['fixture-ws'], { reasoning: 'unsupported' })
+  assert.throws(() => resolveRoutes(Config(raw)))
 })

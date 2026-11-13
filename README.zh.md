@@ -32,6 +32,7 @@ providers:
     baseURL: https://gateway.example.invalid/v1
     apiKeyEnv: GATEWAY_API_KEY
     transport: auto
+    # reasoning: high  # 请求未选择档位时可选的路由默认值。
     discover: true
     discovery:
       contextWindow: 500000
@@ -49,6 +50,10 @@ providers:
 ```
 
 示例是配置模板，不是可用的实际地址。通过已有凭据服务保存密钥，不要写入插件包。`transport: sse` 为该路由关闭 WS。只接受 `gpt-` 或 `openai/gpt-` 模型 id；非 GPT id、重复能力和未支持的配置字段会在注册路由前报错。思考等级必须符合网关实际支持的 Responses 能力。
+
+`reasoning` 可在请求未选择档位时提供路由默认值；请求中显式指定的档位优先。省略该字段会保留原有的提供商默认行为：`reasoningEfforts` 仅声明能力，不会自动选择第一项。默认值必须被每个显式模型以及已启用的自动发现元数据模板支持；无效默认值会在注册路由前报错。
+
+Responses 使用 `reasoning.effort` 传递所选档位，WS 的 `response.create` 事件也一样；插件不伪造 `reasoning_effort` 别名。现有模型声明不向具备思考能力的模型提供 `off`。对未声明思考能力的模型，`off` 表示省略档位，不会强制向上游发送 `none`，也不承诺服务端关闭思考。
 
 `discover: true` 时，适配器还会读取 `${baseURL}/models`，把 `models` 未列出的 GPT 文本模型 id 自动追加进来；图片、音频、embedding 等非文本 id 会被忽略。显式条目优先并覆盖元数据；`discovery.exclude` 可列出网关有、但本路由不应提供的 id。网关的模型列表不提供上下文窗口或思考等级，因此发现模型使用 `discovery` 默认值；新模型元数据不同时应补一条显式覆盖。发现结果按 `ttlMs` 缓存，失败时保留显式模型并记录安全告警；默认关闭。
 
@@ -80,7 +85,7 @@ pnpm test
 
 ## 模型体验
 
-插件不增加系统提示、工具定义或用户消息。DSH 与 pi-ai 继续序列化历史、图片、思考选项和工具调用。WS 与 SSE 使用相同的 Responses 解析器；usage 在终止结果之前提供。对话切换到新路由时可能丢弃旧适配器的提供商原生 replay 元数据并改变缓存命中，但不会迁移或删除历史。WS 不保证降低 token 费用或延迟。
+插件不增加系统提示、工具定义或用户消息。DSH 与 pi-ai 继续序列化历史、图片、思考选项和工具调用。WS 与 SSE 使用相同的 Responses 解析器；usage 在终止结果之前提供。对话切换到新路由时可能丢弃旧适配器的提供商原生 replay 元数据并改变缓存命中，但不会迁移或删除历史。WS 不保证降低 token 费用或延迟。配置的默认思考档位与显式档位选择相同的上游参数，可能影响 token 用量和延迟。
 
 ## 已知限制
 

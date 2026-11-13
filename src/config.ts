@@ -34,6 +34,8 @@ export interface GatewayConfig {
   apiKeyEnv: string
   transport: 'auto' | 'sse'
   headers: Record<string, string>
+  /** Default effort for requests without a selection; every adopted model declaration must support it. */
+  reasoning?: ModelThinkingLevel
   models: GatewayModelConfig[]
   discover: boolean
   discovery: GatewayDiscoveryConfig
@@ -92,6 +94,7 @@ const gatewaySchema: z<GatewayInput, GatewayConfig> = z.object({
   apiKeyEnv: z.string().role('credential-ref').required(),
   transport: z.union(['auto', 'sse']).default('auto'),
   headers: z.dict(z.string()).default({}),
+  reasoning: z.union([z.const('off'), effort]),
   models: z.array(modelSchema).default([]),
   discover: z.boolean().default(false),
   discovery: discoverySchema.default({}),
@@ -165,7 +168,7 @@ export function createGatewayModel(
 export function resolveRoutes(config: Config): ReadonlyMap<string, GatewayRoute> {
   if (Object.keys(config).some(key => key !== 'providers')) throw new LlmError('GPT gateway configuration accepts only providers.', 'INVALID_CONFIG')
   const routes = new Map<string, GatewayRoute>()
-  const allowedGatewayKeys = ['displayName', 'baseURL', 'apiKeyEnv', 'transport', 'headers', 'models', 'discover', 'discovery', 'fallbackAfterFailures', 'fallbackCooldownMs', 'websocketConnectTimeoutMs', 'closeTimeoutMs', 'streamIdleTimeoutMs', 'maxFrameBytes', 'maxBufferedEvents', 'maxRequestImageBytes', 'maxRequestImages', 'imageOffloadCountQuantum', 'requestImagePixelBudget', 'requestImageMaxBytes', 'supportsMaxOutputTokens', 'retryPolicy']
+  const allowedGatewayKeys = ['displayName', 'baseURL', 'apiKeyEnv', 'transport', 'headers', 'reasoning', 'models', 'discover', 'discovery', 'fallbackAfterFailures', 'fallbackCooldownMs', 'websocketConnectTimeoutMs', 'closeTimeoutMs', 'streamIdleTimeoutMs', 'maxFrameBytes', 'maxBufferedEvents', 'maxRequestImageBytes', 'maxRequestImages', 'imageOffloadCountQuantum', 'requestImagePixelBudget', 'requestImageMaxBytes', 'supportsMaxOutputTokens', 'retryPolicy']
   const allowedModelKeys = ['id', 'name', 'contextWindow', 'maxTokens', 'input', 'reasoningEfforts']
   const allowedDiscoveryKeys = ['contextWindow', 'maxTokens', 'input', 'reasoningEfforts', 'exclude', 'timeoutMs', 'ttlMs']
   for (const [id, raw] of Object.entries(config.providers)) {
@@ -200,9 +203,17 @@ export function resolveRoutes(config: Config): ReadonlyMap<string, GatewayRoute>
       seen.add(model.id)
       return createGatewayModel(id, cfg, model.id, model.name ?? model.id, model.contextWindow, model.maxTokens, model.input, model.reasoningEfforts)
     })
+    const reasoning = cfg.reasoning
+    if (reasoning !== undefined) {
+      const supports = (efforts: GatewayModelConfig['reasoningEfforts']): boolean => reasoning === 'off' ? efforts.length === 0 : efforts.includes(reasoning)
+      const unsupported = cfg.models.find(model => !supports(model.reasoningEfforts))
+      if (unsupported !== undefined) throw new LlmError(`GPT gateway "${id}" default reasoning "${reasoning}" is not supported by model "${unsupported.id}".`, 'INVALID_CONFIG')
+      if (cfg.discover && !supports(cfg.discovery.reasoningEfforts)) throw new LlmError(`GPT gateway "${id}" default reasoning "${reasoning}" is not supported by discovery models.`, 'INVALID_CONFIG')
+    }
     const profile: ResolvedPiAiProviderProfile = {
       provider: id, displayName: cfg.displayName ?? id, api: 'openai-responses', baseURL: cfg.baseURL,
       apiKeyEnv: credentialRef(cfg.apiKeyEnv), headers: { ...cfg.headers },
+      ...reasoning === undefined ? {} : { reasoning },
       streamIdleTimeoutMs: cfg.streamIdleTimeoutMs,
       maxRequestImageBytes: cfg.maxRequestImageBytes, maxRequestImages: cfg.maxRequestImages,
       imageOffloadCountQuantum: cfg.imageOffloadCountQuantum,

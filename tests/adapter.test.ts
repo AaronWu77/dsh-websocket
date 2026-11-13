@@ -6,11 +6,12 @@ import type { Socket } from 'node:net'
 import { test } from 'node:test'
 import type { TestContext } from 'node:test'
 import { WebSocket, WebSocketServer } from 'ws'
-import { LlmError } from '@deepseek-ai/dsh-llm'
+import { LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { GatewayAdapter } from '../src/adapter.ts'
 import type { GatewayAdapterOptions } from '../src/adapter.ts'
 import { Config, resolveRoutes } from '../src/config.ts'
+import type { GatewayInput } from '../src/config.ts'
 
 const CASE_TIMEOUT_MS = 15_000
 
@@ -144,7 +145,7 @@ async function wireFixture(t: TestContext, options: { status?: number; onCreate?
   }
 }
 
-function declaration(baseURL: string, ids: string[] = ['gateway-ws']) {
+function declaration(baseURL: string, ids: string[] = ['gateway-ws'], overrides: Partial<GatewayInput> = {}) {
   return {
     providers: Object.fromEntries(ids.map(id => [id, {
       displayName: id,
@@ -157,14 +158,15 @@ function declaration(baseURL: string, ids: string[] = ['gateway-ws']) {
       fallbackAfterFailures: 5,
       fallbackCooldownMs: 300_000,
       models: [{ id: 'gpt-fixture', contextWindow: 32_000, maxTokens: 512 }],
+      ...overrides,
     }])),
   }
 }
 
-function adapter(t: TestContext, baseURL: string, ids: string[] = ['gateway-ws'], resolveApiKey?: GatewayAdapterOptions['resolveApiKey']) {
+function adapter(t: TestContext, baseURL: string, ids: string[] = ['gateway-ws'], resolveApiKey?: GatewayAdapterOptions['resolveApiKey'], overrides: Partial<GatewayInput> = {}) {
   const credentials: Array<{ provider: string; reference: string | undefined }> = []
   const reports: Array<{ provider: string; event: Report }> = []
-  const client = new GatewayAdapter(resolveRoutes(Config(declaration(baseURL, ids))), {
+  const client = new GatewayAdapter(resolveRoutes(Config(declaration(baseURL, ids, overrides))), {
     resolveApiKey: resolveApiKey ?? (async (provider, profile) => {
       credentials.push({ provider, reference: profile.apiKeyEnv })
       return `credential:${provider}`
@@ -467,4 +469,61 @@ test('parallel routes retain independent credentials, profile headers and output
   assert.equal(gateway.upgrades.length, 2)
   assert.equal(gateway.posts.length, 0)
   await Promise.all(requests.map(assertClosed))
+})
+
+function reasoningRoute(overrides: Partial<GatewayInput> = {}): Partial<GatewayInput> {
+  return { models: [{ id: 'gpt-fixture', contextWindow: 32_000, maxTokens: 512, reasoningEfforts: ['high', 'xhigh', 'max'] }], ...overrides }
+}
+
+for (const mode of ['websocket', 'sse', 'fallback'] as const) {
+  test(`reasoning defaults and explicit overrides survive ${mode}`, { timeout: CASE_TIMEOUT_MS }, async t => {
+    const gateway = await wireFixture(t, mode === 'fallback' ? { status: 404 } : {})
+    const { client } = adapter(t, gateway.baseURL, ['gateway-ws'], undefined, reasoningRoute({ reasoning: 'high', transport: mode === 'sse' ? 'sse' : 'auto' }))
+    assert.equal((await client.resolveModel('gateway-ws', 'gpt-fixture')).reasoning?.defaultEffort, 'high')
+    assertSuccess(await collect(client.stream(request())))
+    const prepared = await client.prepareCall('gateway-ws', 'gpt-fixture')
+    assertSuccess(await collect(prepared.stream({ ...request(), reasoningEffort: ReasoningEffortId('xhigh') })))
+    if (mode === 'websocket') {
+      const first = await gateway.nextCreate(), second = await gateway.nextCreate()
+      assert.deepEqual(first.payload.reasoning, { effort: 'high', summary: 'auto' })
+      assert.deepEqual(second.payload.reasoning, { effort: 'xhigh', summary: 'auto' })
+      assert.deepEqual(second.payload.include, ['reasoning.encrypted_content'])
+      await assertClosed(first); await assertClosed(second)
+      assert.equal(gateway.posts.length, 0)
+    } else {
+      assert.equal(gateway.posts.length, 2)
+      assert.deepEqual(gateway.posts[0]!.payload.reasoning, { effort: 'high', summary: 'auto' })
+      assert.deepEqual(gateway.posts[1]!.payload.reasoning, { effort: 'xhigh', summary: 'auto' })
+      assert.deepEqual(gateway.posts[1]!.payload.include, ['reasoning.encrypted_content'])
+      assert.equal(gateway.upgrades.length, mode === 'fallback' ? 2 : 0)
+    }
+  })
+}
+
+test('reasoning capabilities without a default do not synthesize an effort', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const gateway = await wireFixture(t)
+  const { client } = adapter(t, gateway.baseURL, ['gateway-ws'], undefined, reasoningRoute())
+  assert.equal((await client.resolveModel('gateway-ws', 'gpt-fixture')).reasoning?.defaultEffort, undefined)
+  assertSuccess(await collect(client.stream(request())))
+  const sent = await gateway.nextCreate()
+  assert.equal(sent.payload.reasoning, undefined)
+  assert.equal(sent.payload.reasoning_effort, undefined)
+  await assertClosed(sent)
+})
+
+test('an explicit off never falls back to the configured reasoning default', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const gateway = await wireFixture(t)
+  const { client } = adapter(t, gateway.baseURL, ['gateway-ws'], undefined, reasoningRoute({ reasoning: 'high' }))
+  await assert.rejects(collect(client.stream({ ...request(), reasoningEffort: ReasoningEffortId('off') })), llmCode('UNSUPPORTED_REASONING_EFFORT'))
+  assert.equal(gateway.upgrades.length, 0)
+  assert.equal(gateway.posts.length, 0)
+})
+
+test('off on a non-reasoning model does not force a wire none effort', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const gateway = await wireFixture(t)
+  const { client } = adapter(t, gateway.baseURL, ['gateway-ws'], undefined, { reasoning: 'off' })
+  assertSuccess(await collect(client.stream({ ...request(), reasoningEffort: ReasoningEffortId('off') })))
+  const sent = await gateway.nextCreate()
+  assert.equal(sent.payload.reasoning, undefined)
+  await assertClosed(sent)
 })
