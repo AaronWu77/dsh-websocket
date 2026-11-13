@@ -168,8 +168,11 @@ export class GatewayAdapter extends LlmAdapter {
   override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     const route = this.route(options.provider)
     const state: RequestState = { started: false }
-    const native = this.native(route, state, this.modelsFor(route))
-    return this.owned(request => native.stream(request), options, state)
+    const self = this
+    return this.owned(async function* (request) {
+      const models = await self.allModels(route)
+      yield* self.native(route, state, models).stream(request)
+    }, options, state)
   }
 
   private owned(dispatch: (options: GenerateOptions) => AsyncIterable<StreamChunk>, options: GenerateOptions, state: RequestState): AsyncIterableIterator<StreamChunk> {
