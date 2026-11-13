@@ -38,6 +38,8 @@ providers:
       maxTokens: 128000
       input: [text, image]
       reasoningEfforts: [high, xhigh, max]
+    fallbackAfterFailures: 5
+    fallbackCooldownMs: 300000
     models:
       - id: gpt-example
         contextWindow: 500000
@@ -49,6 +51,8 @@ providers:
 示例是配置模板，不是可用的实际地址。通过已有凭据服务保存密钥，不要写入插件包。`transport: sse` 为该路由关闭 WS。只接受 `gpt-` 或 `openai/gpt-` 模型 id；非 GPT id、重复能力和未支持的配置字段会在注册路由前报错。思考等级必须符合网关实际支持的 Responses 能力。
 
 `discover: true` 时，适配器还会读取 `${baseURL}/models`，把 `models` 未列出的 GPT 文本模型 id 自动追加进来；图片、音频、embedding 等非文本 id 会被忽略。显式条目优先并覆盖元数据；`discovery.exclude` 可列出网关有、但本路由不应提供的 id。网关的模型列表不提供上下文窗口或思考等级，因此发现模型使用 `discovery` 默认值；新模型元数据不同时应补一条显式覆盖。发现结果按 `ttlMs` 缓存，失败时保留显式模型并记录安全告警；默认关闭。
+
+连续 `fallbackAfterFailures` 次 WebSocket 失败后（默认 5 次；0 表示关闭），该路由在 `fallbackCooldownMs` 内改用 SSE（默认 5 分钟）。冷却到期后只重新探测一次 WebSocket：成功则清零失败计数，失败则重新进入 SSE 冷却。已经在同一次请求内成功回退到 SSE 的失败不计数。
 
 配置模式提供握手、流空闲与关闭超时、帧和事件队列限制、图片限制及普通 DSH `retryPolicy`。省略重试策略时沿用 DSH 的有限 normal 策略，插件不增加独立的重试循环。原有提供商路由保留用于回滚。插件不会更改已选模型或子智能体模型允许列表。
 

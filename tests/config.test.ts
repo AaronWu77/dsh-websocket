@@ -35,6 +35,8 @@ test('schema defaults retain auto transport and the existing finite retry policy
   assert.equal(route.config.transport, 'auto')
   assert.equal(route.config.websocketConnectTimeoutMs, 10_000)
   assert.equal(route.config.closeTimeoutMs, 2_000)
+  assert.equal(route.config.fallbackAfterFailures, 5)
+  assert.equal(route.config.fallbackCooldownMs, 300_000)
   assert.equal(route.profile.apiKeyEnv, 'FIXTURE_GATEWAY_KEY')
   assert.equal(route.profile.retryPolicy.mode, 'normal')
   if (route.profile.retryPolicy.mode !== 'normal') assert.fail('expected a finite retry policy')

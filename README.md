@@ -38,6 +38,8 @@ providers:
       maxTokens: 128000
       input: [text, image]
       reasoningEfforts: [high, xhigh, max]
+    fallbackAfterFailures: 5
+    fallbackCooldownMs: 300000
     models:
       - id: gpt-example
         contextWindow: 500000
@@ -49,6 +51,8 @@ providers:
 The example is a declaration template, not a working endpoint. Store the key through the existing credential service, not in the bundle. `transport: sse` disables WS for that route. Only `gpt-` or `openai/gpt-` model ids are accepted; non-GPT ids, duplicate capabilities and unsupported configuration fields fail before route registration. Model effort names must match the gateway's actual Responses capabilities.
 
 With `discover: true`, the adapter also reads `${baseURL}/models` and appends every GPT text id that `models` does not list; image, audio, embedding and similar non-text ids are ignored. Explicit entries win and override metadata; `discovery.exclude` names ids the gateway lists but this route should not offer. The gateway model list carries no context-window or reasoning-level metadata, so `discovery` supplies defaults for discovered ids; add an explicit entry when a new model differs. Discovery is cached for `ttlMs`, a failure keeps the explicit models and logs a safe warning, and discovery is off by default.
+
+After `fallbackAfterFailures` consecutive WebSocket failures (default 5; 0 disables), the route serves requests over SSE for `fallbackCooldownMs` (default 5 minutes). At the next cooldown expiry it makes one fresh WebSocket probe; a successful probe resets the failure count, while a failed probe reopens the SSE circuit. Failures that already fell back to SSE inside the same attempt do not count.
 
 The schema exposes handshake, stream-idle and close timeouts, frame and event-queue limits, image limits, and the ordinary DSH `retryPolicy`. Omitted retry policy uses DSH's finite normal policy; the plugin adds no separate retry loop. Existing provider routes remain available for rollback. The plugin does not change the selected model or subagent model allowlist.
 

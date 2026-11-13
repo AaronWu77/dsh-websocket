@@ -37,6 +37,8 @@ export interface GatewayConfig {
   models: GatewayModelConfig[]
   discover: boolean
   discovery: GatewayDiscoveryConfig
+  fallbackAfterFailures: number
+  fallbackCooldownMs: number
   websocketConnectTimeoutMs: number
   closeTimeoutMs: number
   streamIdleTimeoutMs: number
@@ -93,6 +95,8 @@ const gatewaySchema: z<GatewayInput, GatewayConfig> = z.object({
   models: z.array(modelSchema).default([]),
   discover: z.boolean().default(false),
   discovery: discoverySchema.default({}),
+  fallbackAfterFailures: z.number().step(1).min(0).max(2_147_483_647).default(5),
+  fallbackCooldownMs: positive().default(300_000),
   websocketConnectTimeoutMs: positive().default(10_000),
   closeTimeoutMs: positive().default(2_000),
   streamIdleTimeoutMs: positive().default(300_000),
@@ -161,7 +165,7 @@ export function createGatewayModel(
 export function resolveRoutes(config: Config): ReadonlyMap<string, GatewayRoute> {
   if (Object.keys(config).some(key => key !== 'providers')) throw new LlmError('GPT gateway configuration accepts only providers.', 'INVALID_CONFIG')
   const routes = new Map<string, GatewayRoute>()
-  const allowedGatewayKeys = ['displayName', 'baseURL', 'apiKeyEnv', 'transport', 'headers', 'models', 'discover', 'discovery', 'websocketConnectTimeoutMs', 'closeTimeoutMs', 'streamIdleTimeoutMs', 'maxFrameBytes', 'maxBufferedEvents', 'maxRequestImageBytes', 'maxRequestImages', 'imageOffloadCountQuantum', 'requestImagePixelBudget', 'requestImageMaxBytes', 'supportsMaxOutputTokens', 'retryPolicy']
+  const allowedGatewayKeys = ['displayName', 'baseURL', 'apiKeyEnv', 'transport', 'headers', 'models', 'discover', 'discovery', 'fallbackAfterFailures', 'fallbackCooldownMs', 'websocketConnectTimeoutMs', 'closeTimeoutMs', 'streamIdleTimeoutMs', 'maxFrameBytes', 'maxBufferedEvents', 'maxRequestImageBytes', 'maxRequestImages', 'imageOffloadCountQuantum', 'requestImagePixelBudget', 'requestImageMaxBytes', 'supportsMaxOutputTokens', 'retryPolicy']
   const allowedModelKeys = ['id', 'name', 'contextWindow', 'maxTokens', 'input', 'reasoningEfforts']
   const allowedDiscoveryKeys = ['contextWindow', 'maxTokens', 'input', 'reasoningEfforts', 'exclude', 'timeoutMs', 'ttlMs']
   for (const [id, raw] of Object.entries(config.providers)) {

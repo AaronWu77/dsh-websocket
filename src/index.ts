@@ -29,6 +29,7 @@ export function apply(ctx: Context, config: Config): void {
     prepareHeaders: (request, headers) => ctx.waterfall('llm-pi-ai/request-headers', request, headers, () => headers),
     onReplayDegrade: ({ provider, model }) => ctx.logger.warn(`GPT gateway ${provider}/${model}: unusable native replay metadata; sending provider-neutral history.`),
     onDiscoveryError: (provider, message) => ctx.logger.warn(`GPT gateway ${provider}: model discovery failed; keeping configured models (${message}).`),
+    onCircuitOpen: (provider, failures, cooldownMs) => ctx.logger.warn(`GPT gateway ${provider}: ${String(failures)} consecutive WebSocket failures; using SSE for ${String(cooldownMs)} ms before retrying WebSocket.`),
     report: (provider, event) => {
       const text = `GPT gateway ${provider}: ${event.transport} ${event.phase}${event.code === undefined ? '' : ` (${event.code})`}`
       if (event.phase === 'fallback') ctx.logger.warn(text)

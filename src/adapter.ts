@@ -20,12 +20,14 @@ export interface GatewayAdapterOptions {
   prepareHeaders?: PiAiAdapterOptions['prepareHeaders']
   onReplayDegrade?: PiAiAdapterOptions['onReplayDegrade']
   onDiscoveryError?: (provider: string, message: string) => void
+  onCircuitOpen?: (provider: string, failures: number, cooldownMs: number) => void
   report: (provider: string, event: Parameters<ConstructorParameters<typeof ResponsesTransport>[0]['report']>[0]) => void
 }
 
-interface RequestState { transport?: ResponsesTransport; started: boolean }
+interface RequestState { transport?: ResponsesTransport; started: boolean; route?: GatewayRoute; mode?: 'auto' | 'sse' }
 interface Lease { cancel: () => Promise<void>; settled: Promise<void> }
 interface DiscoveryState { models: readonly Model<'openai-responses'>[]; expiresAt: number; pending?: Promise<void> }
+interface CircuitState { failures: number; sseUntil: number }
 
 const GPT_MODEL_ID = /^(?:openai\/)?gpt-/i
 const NON_TEXT_MODEL_ID = /(?:^|[-_/])(?:image|images|embedding|embeddings|audio|realtime|tts|transcribe|transcription|moderation|dall-e)(?:[-_/]|$)/i
@@ -43,6 +45,7 @@ export class GatewayAdapter extends LlmAdapter {
   private readonly lifetime = new AbortController()
   private readonly active = new Set<Lease>()
   private readonly discoveries = new Map<string, DiscoveryState>()
+  private readonly circuits = new Map<string, CircuitState>()
   private disposing?: Promise<void>
 
   constructor(private readonly routes: ReadonlyMap<string, GatewayRoute>, private readonly options: GatewayAdapterOptions) { super() }
@@ -56,6 +59,35 @@ export class GatewayAdapter extends LlmAdapter {
   private modelsFor(route: GatewayRoute): readonly Model<'openai-responses'>[] {
     const discovered = this.discoveries.get(route.id)?.models ?? []
     return discovered.length === 0 ? route.models : [...route.models, ...discovered]
+  }
+
+  /** @returns the transport for the next attempt, honoring an open SSE circuit. */
+  private modeFor(route: GatewayRoute): 'auto' | 'sse' {
+    if (route.config.transport === 'sse') return 'sse'
+    const circuit = this.circuits.get(route.id)
+    return circuit !== undefined && Date.now() < circuit.sseUntil ? 'sse' : 'auto'
+  }
+
+  /** Count one failed WebSocket attempt and open the SSE circuit at the threshold. */
+  private noteWsFailure(route: GatewayRoute): void {
+    const threshold = route.config.fallbackAfterFailures
+    if (threshold <= 0) return
+    const circuit = this.circuits.get(route.id) ?? { failures: 0, sseUntil: 0 }
+    circuit.failures += 1
+    if (circuit.failures >= threshold) {
+      circuit.sseUntil = Date.now() + route.config.fallbackCooldownMs
+      this.options.onCircuitOpen?.(route.id, circuit.failures, route.config.fallbackCooldownMs)
+    }
+    this.circuits.set(route.id, circuit)
+  }
+
+  /** A successful WebSocket request closes the circuit and resets its failure count. */
+  private noteSuccess(route: GatewayRoute, mode: 'auto' | 'sse'): void {
+    if (mode !== 'auto') return
+    const circuit = this.circuits.get(route.id)
+    if (circuit === undefined) return
+    circuit.failures = 0
+    circuit.sseUntil = 0
   }
 
   private async allModels(route: GatewayRoute): Promise<readonly Model<'openai-responses'>[]> {
@@ -108,8 +140,11 @@ export class GatewayAdapter extends LlmAdapter {
       if (state.transport !== undefined) throw new LlmError('A GPT gateway request cannot start a second native stream.', 'INVALID_PREPARED_CALL')
       if (options?.apiKey === undefined) throw new LlmError('The GPT gateway credential was not resolved.', 'MISSING_CREDENTIAL')
       const cfg = route.config
+      const mode = this.modeFor(route)
+      state.route = route
+      state.mode = mode
       state.transport = new ResponsesTransport({
-        mode: cfg.transport, baseURL: cfg.baseURL, apiKey: options.apiKey,
+        mode, baseURL: cfg.baseURL, apiKey: options.apiKey,
         signal: options.signal ?? this.lifetime.signal,
         connectTimeoutMs: cfg.websocketConnectTimeoutMs, closeTimeoutMs: cfg.closeTimeoutMs,
         maxFrameBytes: cfg.maxFrameBytes, maxBufferedEvents: cfg.maxBufferedEvents,
@@ -247,9 +282,19 @@ export class GatewayAdapter extends LlmAdapter {
         }
         yield chunk
       }
+    } catch (error) {
+      if (state.route !== undefined && state.mode === 'auto' && state.transport?.failure !== undefined && state.transport.failure.code !== 'ABORTED') {
+        this.noteWsFailure(state.route)
+      }
+      throw error
     } finally {
       controller.abort(new Error('GPT gateway request settled'))
       await state.transport?.close()
+    }
+    const failure = state.transport?.failure
+    if (state.route !== undefined && state.mode === 'auto') {
+      if (failure !== undefined && failure.code !== 'ABORTED') this.noteWsFailure(state.route)
+      else if (terminal?.type === 'finish' && terminal.reason.kind !== 'error' && terminal.reason.kind !== 'aborted') this.noteSuccess(state.route, state.mode)
     }
     if (terminal !== undefined) yield terminal
   }

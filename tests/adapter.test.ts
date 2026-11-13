@@ -154,6 +154,8 @@ function declaration(baseURL: string, ids: string[] = ['gateway-ws']) {
       websocketConnectTimeoutMs: 3_000,
       closeTimeoutMs: 200,
       streamIdleTimeoutMs: 5_000,
+      fallbackAfterFailures: 5,
+      fallbackCooldownMs: 300_000,
       models: [{ id: 'gpt-fixture', contextWindow: 32_000, maxTokens: 512 }],
     }])),
   }
@@ -237,6 +239,33 @@ test('the public adapter serializes a user request through PI and maps WS output
   assert.deepEqual(reports, [{ provider: 'gateway-ws', event: { transport: 'websocket', phase: 'connected' } }])
   assert.equal(gateway.posts.length, 0)
   await assertClosed(sent)
+})
+
+test('a persistent WS failure opens an SSE circuit after the configured threshold', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const gateway = await wireFixture(t, { status: 401 })
+  const raw = declaration(gateway.baseURL)
+  raw.providers['gateway-ws'].fallbackAfterFailures = 5
+  raw.providers['gateway-ws'].fallbackCooldownMs = 60_000
+  const reports: Array<{ provider: string; event: Report }> = []
+  const openings: Array<{ provider: string; failures: number }> = []
+  const client = new GatewayAdapter(resolveRoutes(Config(raw)), {
+    resolveApiKey: async () => 'credential:gateway-ws',
+    report: (provider, event) => reports.push({ provider, event }),
+    onCircuitOpen: (provider, failures) => openings.push({ provider, failures }),
+  })
+  t.after(() => client.dispose())
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await collect(client.stream(request()))
+  }
+  assert.equal(gateway.upgrades.length, 5)
+  assert.equal(gateway.posts.length, 0)
+  assert.deepEqual(openings, [{ provider: 'gateway-ws', failures: 5 }])
+
+  assertSuccess(await collect(client.stream(request())))
+  assert.equal(gateway.upgrades.length, 5, 'the sixth attempt uses SSE instead of another upgrade')
+  assert.equal(gateway.posts.length, 1)
+  assert.equal(reports.some(report => report.event.transport === 'sse' && report.event.phase === 'request'), true)
 })
 
 test('an unsupported WS handshake preserves semantic DSH output through SSE fallback', { timeout: CASE_TIMEOUT_MS }, async t => {
