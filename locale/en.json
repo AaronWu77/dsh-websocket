@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-Websocket",
+    "description": "Use WebSocket first for explicitly configured GPT Responses gateways, with scoped SSE fallback and request cleanup."
+  }
+}

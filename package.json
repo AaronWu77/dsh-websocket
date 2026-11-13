@@ -1,0 +1,55 @@
+{
+  "name": "dsh-websocket",
+  "displayName": "dsh-Websocket",
+  "version": "0.1.0-local.1",
+  "private": true,
+  "description": "WebSocket-first GPT Responses gateways with scoped SSE fallback.",
+  "repository": { "type": "git", "url": "git+https://github.com/AaronWu77/dsh-websocket.git" },
+  "homepage": "https://github.com/AaronWu77/dsh-websocket",
+  "bugs": { "url": "https://github.com/AaronWu77/dsh-websocket/issues" },
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=24.9.0", "dsh": "0.2.2-rc.1" },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib", "locale", "icon.svg", "cordis.patch.yml", "README.md", "README.zh.md", "LICENSE"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:check": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:profile": "tsx tests/support/run-gateway-headless.ts",
+    "check": "pnpm run build && pnpm run build:check && pnpm test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "openai": "7.19.0",
+    "ws": "8.22.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-attachment": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "link:../../../vendor/cordis",
+    "@deepseek-ai/dsh-attachment": "link:../../../packages/attachment/attachment",
+    "@deepseek-ai/dsh-credentials": "link:../../../packages/credentials/credentials",
+    "@deepseek-ai/dsh-llm": "link:../../../packages/llm/llm",
+    "@deepseek-ai/dsh-llm-pi-ai": "link:../../../packages/llm/llm-pi-ai",
+    "@deepseek-ai/schemastery": "link:../../../vendor/schemastery",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3"
+  }
+}
