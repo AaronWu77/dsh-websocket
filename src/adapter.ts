@@ -28,6 +28,7 @@ interface Lease { cancel: () => Promise<void>; settled: Promise<void> }
 interface DiscoveryState { models: readonly Model<'openai-responses'>[]; expiresAt: number; pending?: Promise<void> }
 
 const GPT_MODEL_ID = /^(?:openai\/)?gpt-/i
+const NON_TEXT_MODEL_ID = /(?:^|[-_/])(?:image|images|embedding|embeddings|audio|realtime|tts|transcribe|transcription|moderation|dall-e)(?:[-_/]|$)/i
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined
@@ -86,7 +87,7 @@ export class GatewayAdapter extends LlmAdapter {
       for (const entry of entries) {
         const item = record(entry)
         const id = item?.id
-        if (typeof id !== 'string' || !GPT_MODEL_ID.test(id) || explicit.has(id) || models.some(model => model.id === id)) continue
+        if (typeof id !== 'string' || !GPT_MODEL_ID.test(id) || NON_TEXT_MODEL_ID.test(id) || explicit.has(id) || models.some(model => model.id === id)) continue
         const displayName = typeof item?.display_name === 'string' && item.display_name.length > 0 ? item.display_name : id
         const discovery = route.config.discovery
         models.push(createGatewayModel(route.id, route.config, id, displayName, discovery.contextWindow, discovery.maxTokens, discovery.input, discovery.reasoningEfforts))

@@ -126,6 +126,8 @@ test('discovery appends new GPT models, filters non-GPT and keeps explicit metad
       { id: 'gpt-6.2-new', display_name: 'GPT-6.2 New' },
       { id: 'deepseek-v4.1-flash', display_name: 'DeepSeek' },
       { id: 'openai/gpt-6.1-terra', display_name: 'GPT Terra' },
+      { id: 'gpt-image-2.6-flare', display_name: 'Image model' },
+      { id: 'gpt-4o-audio-preview', display_name: 'Audio model' },
     ],
   })
   const { client, errors } = adapter(t, fixture.baseURL)
