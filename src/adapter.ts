@@ -83,11 +83,12 @@ export class GatewayAdapter extends LlmAdapter {
       const body = record(await response.json())
       const entries = body !== undefined && Array.isArray(body.data) ? body.data : []
       const explicit = new Set(route.models.map(model => model.id))
+      const excluded = new Set(route.config.discovery.exclude.map(id => id.toLowerCase()))
       const models: Model<'openai-responses'>[] = []
       for (const entry of entries) {
         const item = record(entry)
         const id = item?.id
-        if (typeof id !== 'string' || !GPT_MODEL_ID.test(id) || NON_TEXT_MODEL_ID.test(id) || explicit.has(id) || models.some(model => model.id === id)) continue
+        if (typeof id !== 'string' || !GPT_MODEL_ID.test(id) || NON_TEXT_MODEL_ID.test(id) || explicit.has(id) || excluded.has(id.toLowerCase()) || models.some(model => model.id === id)) continue
         const displayName = typeof item?.display_name === 'string' && item.display_name.length > 0 ? item.display_name : id
         const discovery = route.config.discovery
         models.push(createGatewayModel(route.id, route.config, id, displayName, discovery.contextWindow, discovery.maxTokens, discovery.input, discovery.reasoningEfforts))

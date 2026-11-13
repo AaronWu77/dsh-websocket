@@ -100,7 +100,7 @@ function declaration(baseURL: string, overrides: Partial<GatewayInput> = {}): Co
         apiKeyEnv: 'GATEWAY_DISCOVERY_KEY',
         transport: 'auto',
         discover: true,
-        discovery: { contextWindow: 500_000, maxTokens: 128_000, input: ['text'], reasoningEfforts: ['high', 'xhigh'] },
+        discovery: { contextWindow: 500_000, maxTokens: 128_000, input: ['text'], reasoningEfforts: ['high', 'xhigh'], exclude: ['gpt-6-luna'] },
         models: [{ id: 'gpt-6.1-sol', contextWindow: 1_000, maxTokens: 256, input: ['text'], reasoningEfforts: ['high'] }],
         ...overrides,
       },
@@ -128,12 +128,14 @@ test('discovery appends new GPT models, filters non-GPT and keeps explicit metad
       { id: 'openai/gpt-6.1-terra', display_name: 'GPT Terra' },
       { id: 'gpt-image-2.6-flare', display_name: 'Image model' },
       { id: 'gpt-4o-audio-preview', display_name: 'Audio model' },
+      { id: 'gpt-6-luna', display_name: 'Excluded text model' },
     ],
   })
   const { client, errors } = adapter(t, fixture.baseURL)
   const models = await client.listModels('gateway-discovery')
   assert.deepEqual(models.map(model => model.id), ['gpt-6.1-sol', 'gpt-6.2-new', 'openai/gpt-6.1-terra'])
   assert.equal(models.some(model => model.id === 'deepseek-v4.1-flash'), false)
+  assert.equal(models.some(model => model.id === 'gpt-6-luna'), false)
   assert.equal(fixture.modelRequests, 1)
   assert.deepEqual(errors, [])
 

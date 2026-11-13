@@ -22,6 +22,7 @@ export interface GatewayDiscoveryConfig {
   maxTokens: number
   input: ('text' | 'image')[]
   reasoningEfforts: ('minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max')[]
+  exclude: string[]
   timeoutMs: number
   ttlMs: number
 }
@@ -79,6 +80,7 @@ const discoverySchema: z<GatewayDiscoveryInput, GatewayDiscoveryConfig> = z.obje
   maxTokens: positive().default(128_000),
   input: z.array(z.union(['text', 'image'])).default(['text', 'image']),
   reasoningEfforts: z.array(effort).default(['high', 'xhigh', 'max']),
+  exclude: z.array(z.string()).default([]),
   timeoutMs: positive().default(10_000),
   ttlMs: positive().default(300_000),
 })
@@ -161,7 +163,7 @@ export function resolveRoutes(config: Config): ReadonlyMap<string, GatewayRoute>
   const routes = new Map<string, GatewayRoute>()
   const allowedGatewayKeys = ['displayName', 'baseURL', 'apiKeyEnv', 'transport', 'headers', 'models', 'discover', 'discovery', 'websocketConnectTimeoutMs', 'closeTimeoutMs', 'streamIdleTimeoutMs', 'maxFrameBytes', 'maxBufferedEvents', 'maxRequestImageBytes', 'maxRequestImages', 'imageOffloadCountQuantum', 'requestImagePixelBudget', 'requestImageMaxBytes', 'supportsMaxOutputTokens', 'retryPolicy']
   const allowedModelKeys = ['id', 'name', 'contextWindow', 'maxTokens', 'input', 'reasoningEfforts']
-  const allowedDiscoveryKeys = ['contextWindow', 'maxTokens', 'input', 'reasoningEfforts', 'timeoutMs', 'ttlMs']
+  const allowedDiscoveryKeys = ['contextWindow', 'maxTokens', 'input', 'reasoningEfforts', 'exclude', 'timeoutMs', 'ttlMs']
   for (const [id, raw] of Object.entries(config.providers)) {
     if (Object.keys(raw).some(key => !allowedGatewayKeys.includes(key))
       || raw.models.some(model => Object.keys(model).some(key => !allowedModelKeys.includes(key)))
