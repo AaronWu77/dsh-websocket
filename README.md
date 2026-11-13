@@ -32,6 +32,12 @@ providers:
     baseURL: https://gateway.example.invalid/v1
     apiKeyEnv: GATEWAY_API_KEY
     transport: auto
+    discover: true
+    discovery:
+      contextWindow: 500000
+      maxTokens: 128000
+      input: [text, image]
+      reasoningEfforts: [high, xhigh, max]
     models:
       - id: gpt-example
         contextWindow: 500000
@@ -40,7 +46,9 @@ providers:
         reasoningEfforts: [high, xhigh, max]
 ```
 
-The example is a declaration template, not a working endpoint. Store the key through the existing credential service, not in the bundle. `transport: sse` disables WS for that route. Only explicitly listed `gpt-` or `openai/gpt-` model ids are accepted; non-GPT ids, duplicate capabilities and unsupported configuration fields fail before route registration. Model effort names must match the gateway's actual Responses capabilities.
+The example is a declaration template, not a working endpoint. Store the key through the existing credential service, not in the bundle. `transport: sse` disables WS for that route. Only `gpt-` or `openai/gpt-` model ids are accepted; non-GPT ids, duplicate capabilities and unsupported configuration fields fail before route registration. Model effort names must match the gateway's actual Responses capabilities.
+
+With `discover: true`, the adapter also reads `${baseURL}/models` and appends every `gpt-` id that `models` does not list. Explicit entries win and override metadata. The gateway model list carries no context-window or reasoning-level metadata, so `discovery` supplies defaults for discovered ids; add an explicit entry when a new model differs. Discovery is cached for `ttlMs`, a failure keeps the explicit models and logs a safe warning, and discovery is off by default.
 
 The schema exposes handshake, stream-idle and close timeouts, frame and event-queue limits, image limits, and the ordinary DSH `retryPolicy`. Omitted retry policy uses DSH's finite normal policy; the plugin adds no separate retry loop. Existing provider routes remain available for rollback. The plugin does not change the selected model or subagent model allowlist.
 
@@ -73,6 +81,8 @@ The plugin adds no system prompt, tool definition or user message. DSH and pi-ai
 ## Known limitations
 
 The first version does not pool connections or use WS continuation caches across requests. Every model call performs a fresh handshake. It supports ordinary API-key Responses gateways, not Codex OAuth or Chat Completions-only servers. Gateway-specific headers and model capabilities require explicit configuration.
+
+Discovered models use `discovery` defaults because the gateway's `/v1/models` response does not provide context windows or reasoning levels. Discovery needs an OpenAI-compatible `/v1/models` endpoint and a resolvable credential; it does not make a model available if the gateway omits it, and a running process only refreshes after `ttlMs`.
 
 This version has no per-route proxy integration and does not inherit Codex Connect's proxy manager. Use it only for routes intended to connect directly. It neither changes nor bypasses a configured proxy on an existing provider: those original routes remain separate and untouched. Do not adopt a proxy-required route into this plugin until explicit proxy support is implemented and tested.
 

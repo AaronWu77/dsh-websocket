@@ -32,6 +32,12 @@ providers:
     baseURL: https://gateway.example.invalid/v1
     apiKeyEnv: GATEWAY_API_KEY
     transport: auto
+    discover: true
+    discovery:
+      contextWindow: 500000
+      maxTokens: 128000
+      input: [text, image]
+      reasoningEfforts: [high, xhigh, max]
     models:
       - id: gpt-example
         contextWindow: 500000
@@ -40,7 +46,9 @@ providers:
         reasoningEfforts: [high, xhigh, max]
 ```
 
-示例是配置模板，不是可用的实际地址。通过已有凭据服务保存密钥，不要写入插件包。`transport: sse` 为该路由关闭 WS。只接受明确列出的 `gpt-` 或 `openai/gpt-` 模型 id；非 GPT id、重复能力和未支持的配置字段会在注册路由前报错。思考等级必须符合网关实际支持的 Responses 能力。
+示例是配置模板，不是可用的实际地址。通过已有凭据服务保存密钥，不要写入插件包。`transport: sse` 为该路由关闭 WS。只接受 `gpt-` 或 `openai/gpt-` 模型 id；非 GPT id、重复能力和未支持的配置字段会在注册路由前报错。思考等级必须符合网关实际支持的 Responses 能力。
+
+`discover: true` 时，适配器还会读取 `${baseURL}/models`，把 `models` 未列出的 `gpt-` id 自动追加进来。显式条目优先并覆盖元数据。网关的模型列表不提供上下文窗口或思考等级，因此发现模型使用 `discovery` 默认值；新模型元数据不同时应补一条显式覆盖。发现结果按 `ttlMs` 缓存，失败时保留显式模型并记录安全告警；默认关闭。
 
 配置模式提供握手、流空闲与关闭超时、帧和事件队列限制、图片限制及普通 DSH `retryPolicy`。省略重试策略时沿用 DSH 的有限 normal 策略，插件不增加独立的重试循环。原有提供商路由保留用于回滚。插件不会更改已选模型或子智能体模型允许列表。
 
@@ -73,6 +81,8 @@ pnpm test
 ## 已知限制
 
 第一版不跨请求共享连接或 WS continuation 缓存，每次模型调用重新握手。它支持普通 API Key Responses 网关，不支持 Codex OAuth 或仅提供 Chat Completions 的服务器。网关特定请求头与模型能力需要明确配置。
+
+发现模型使用 `discovery` 默认值，因为网关的 `/v1/models` 不提供上下文窗口或思考等级。自动发现需要兼容的 `/v1/models` 端点与可解析凭据；网关未列出某个模型时不会凭空出现，运行中的进程也只在 `ttlMs` 到期后刷新。
 
 当前版本没有逐路由代理集成，也不继承 Codex Connect 的代理管理器。仅用于明确允许直连的路由。它不会更改或绕过已有提供商已配置的代理：原有路由保持独立且不变。在实现并验证显式代理支持前，不应将必须使用代理的路由接入本插件。
 

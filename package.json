@@ -1,7 +1,7 @@
 {
   "name": "dsh-websocket",
   "displayName": "dsh-Websocket",
-  "version": "0.1.0-local.1",
+  "version": "0.2.0-local.1",
   "private": true,
   "description": "WebSocket-first GPT Responses gateways with scoped SSE fallback.",
   "repository": { "type": "git", "url": "git+https://github.com/AaronWu77/dsh-websocket.git" },

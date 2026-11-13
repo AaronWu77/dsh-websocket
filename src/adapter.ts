@@ -7,6 +7,8 @@ import type { GenerateOptions, LlmModelInfo, LlmResolvedModelInfo, PreparedAdapt
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { PiAiAdapterOptions } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { Model } from '@earendil-works/pi-ai'
+import { createGatewayModel } from './config.ts'
 import type { GatewayRoute } from './config.ts'
 import { ResponsesTransport } from './transport.ts'
 
@@ -17,11 +19,19 @@ export interface GatewayAdapterOptions {
   resolveImageAccess?: PiAiAdapterOptions['resolveImageAccess']
   prepareHeaders?: PiAiAdapterOptions['prepareHeaders']
   onReplayDegrade?: PiAiAdapterOptions['onReplayDegrade']
+  onDiscoveryError?: (provider: string, message: string) => void
   report: (provider: string, event: Parameters<ConstructorParameters<typeof ResponsesTransport>[0]['report']>[0]) => void
 }
 
 interface RequestState { transport?: ResponsesTransport; started: boolean }
 interface Lease { cancel: () => Promise<void>; settled: Promise<void> }
+interface DiscoveryState { models: readonly Model<'openai-responses'>[]; expiresAt: number; pending?: Promise<void> }
+
+const GPT_MODEL_ID = /^(?:openai\/)?gpt-/i
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
 
 /**
  * Serve only explicitly configured GPT models. Native replay and content conversion remain pi-ai-owned.
@@ -31,6 +41,7 @@ export class GatewayAdapter extends LlmAdapter {
   private readonly auth = { credentials: new InMemoryCredentialStore(), authContext: defaultProviderAuthContext() }
   private readonly lifetime = new AbortController()
   private readonly active = new Set<Lease>()
+  private readonly discoveries = new Map<string, DiscoveryState>()
   private disposing?: Promise<void>
 
   constructor(private readonly routes: ReadonlyMap<string, GatewayRoute>, private readonly options: GatewayAdapterOptions) { super() }
@@ -41,7 +52,55 @@ export class GatewayAdapter extends LlmAdapter {
     return route
   }
 
-  private native(route: GatewayRoute, state: RequestState): PiAiAdapter {
+  private modelsFor(route: GatewayRoute): readonly Model<'openai-responses'>[] {
+    const discovered = this.discoveries.get(route.id)?.models ?? []
+    return discovered.length === 0 ? route.models : [...route.models, ...discovered]
+  }
+
+  private async allModels(route: GatewayRoute): Promise<readonly Model<'openai-responses'>[]> {
+    if (!route.config.discover) return route.models
+    const state = this.discoveries.get(route.id) ?? { models: [], expiresAt: 0 }
+    this.discoveries.set(route.id, state)
+    if (Date.now() >= state.expiresAt && state.pending === undefined) {
+      state.pending = this.loadDiscovered(route, state).finally(() => { state.pending = undefined })
+    }
+    await state.pending
+    return this.modelsFor(route)
+  }
+
+  private async loadDiscovered(route: GatewayRoute, state: DiscoveryState): Promise<void> {
+    try {
+      const apiKey = await this.options.resolveApiKey(route.id, route.profile)
+      if (apiKey === undefined) throw new LlmError(`The GPT gateway credential for "${route.id}" was not resolved.`, 'MISSING_CREDENTIAL')
+      const url = `${route.config.baseURL.replace(/\/+$/u, '')}/models`
+      const signal = AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(route.config.discovery.timeoutMs)])
+      const response = await fetch(url, {
+        headers: { ...route.config.headers, authorization: `Bearer ${apiKey}`, accept: 'application/json' },
+        signal,
+      })
+      if (!response.ok) throw new Error(`model discovery for "${route.id}" returned HTTP ${response.status}`)
+      const body = record(await response.json())
+      const entries = body !== undefined && Array.isArray(body.data) ? body.data : []
+      const explicit = new Set(route.models.map(model => model.id))
+      const models: Model<'openai-responses'>[] = []
+      for (const entry of entries) {
+        const item = record(entry)
+        const id = item?.id
+        if (typeof id !== 'string' || !GPT_MODEL_ID.test(id) || explicit.has(id) || models.some(model => model.id === id)) continue
+        const displayName = typeof item?.display_name === 'string' && item.display_name.length > 0 ? item.display_name : id
+        const discovery = route.config.discovery
+        models.push(createGatewayModel(route.id, route.config, id, displayName, discovery.contextWindow, discovery.maxTokens, discovery.input, discovery.reasoningEfforts))
+      }
+      state.models = models
+      state.expiresAt = Date.now() + route.config.discovery.ttlMs
+    } catch (error: unknown) {
+      if (this.lifetime.signal.aborted) return
+      state.expiresAt = Date.now() + Math.min(route.config.discovery.ttlMs, 60_000)
+      this.options.onDiscoveryError?.(route.id, error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  private native(route: GatewayRoute, state: RequestState, models: readonly Model<'openai-responses'>[] = route.models): PiAiAdapter {
     const streams = openAIResponsesApi()
     const requestFetch = (options: ProviderRequestOptions | undefined): typeof globalThis.fetch => {
       if (state.transport !== undefined) throw new LlmError('A GPT gateway request cannot start a second native stream.', 'INVALID_PREPARED_CALL')
@@ -59,11 +118,15 @@ export class GatewayAdapter extends LlmAdapter {
     const provider: Provider = {
       id: route.id, name: route.profile.displayName, baseUrl: route.config.baseURL,
       auth: { apiKey: { name: 'Gateway credential', resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: 'gateway-credential' }) } },
-      getModels: () => route.models,
+      getModels: () => models,
       stream: (model, context, options) => streams.stream(model, context, { ...options, fetch: requestFetch(options), maxRetries: 0 }),
       streamSimple: (model, context, options) => streams.streamSimple(model, context, { ...options, fetch: requestFetch(options), maxRetries: 0 }),
     }
-    const profiles = new Map([[route.id, { ...route.profile, piProvider: provider }]])
+    const configuredMaxTokens = new Map(route.profile.configuredMaxTokens)
+    for (const model of models) {
+      if (!configuredMaxTokens.has(model.id)) configuredMaxTokens.set(model.id, model.maxTokens)
+    }
+    const profiles = new Map([[route.id, { ...route.profile, configuredMaxTokens, piProvider: provider }]])
     return new PiAiAdapter({
       profiles: () => profiles,
       resolveApiKey: this.options.resolveApiKey,
@@ -78,26 +141,34 @@ export class GatewayAdapter extends LlmAdapter {
   override providerInfo(provider: string) { return { id: provider, name: this.route(provider).profile.displayName } }
   override providerRetryPolicy(provider: string) { return this.route(provider).profile.retryPolicy }
   override imageRequestTarget(provider: string, model: string, image: ImageAttachmentRef) {
-    return this.native(this.route(provider), { started: false }).imageRequestTarget(provider, model, image)
+    const route = this.route(provider)
+    return this.native(route, { started: false }, this.modelsFor(route)).imageRequestTarget(provider, model, image)
   }
-  override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    return Promise.resolve(this.route(provider).models.map(model => ({ provider, id: model.id, name: model.name, inputModalities: [...model.input] })))
+  override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+    const route = this.route(provider)
+    const models = await this.allModels(route)
+    return models.map(model => ({ provider, id: model.id, name: model.name, inputModalities: [...model.input] }))
   }
-  override resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
+  override async resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     signal?.throwIfAborted()
-    return this.native(this.route(provider), { started: false }).resolveModel(provider, model, signal)
+    const route = this.route(provider)
+    const models = await this.allModels(route)
+    signal?.throwIfAborted()
+    return this.native(route, { started: false }, models).resolveModel(provider, model, signal)
   }
   override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
     if (this.lifetime.signal.aborted) throw new LlmError('The GPT gateway plugin is stopping.', 'ABORTED')
     const route = this.route(provider)
+    const models = await this.allModels(route)
     const state: RequestState = { started: false }
-    const native = this.native(route, state)
+    const native = this.native(route, state, models)
     const prepared = await native.prepareCall(provider, model, signal)
     return { model: prepared.model, stream: options => this.owned(prepared.stream, options, state) }
   }
   override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    const route = this.route(options.provider)
     const state: RequestState = { started: false }
-    const native = this.native(this.route(options.provider), state)
+    const native = this.native(route, state, this.modelsFor(route))
     return this.owned(request => native.stream(request), options, state)
   }
 

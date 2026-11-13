@@ -28,6 +28,7 @@ export function apply(ctx: Context, config: Config): void {
     resolveAttachments: () => ctx.get('attachments'),
     prepareHeaders: (request, headers) => ctx.waterfall('llm-pi-ai/request-headers', request, headers, () => headers),
     onReplayDegrade: ({ provider, model }) => ctx.logger.warn(`GPT gateway ${provider}/${model}: unusable native replay metadata; sending provider-neutral history.`),
+    onDiscoveryError: (provider, message) => ctx.logger.warn(`GPT gateway ${provider}: model discovery failed; keeping configured models (${message}).`),
     report: (provider, event) => {
       const text = `GPT gateway ${provider}: ${event.transport} ${event.phase}${event.code === undefined ? '' : ` (${event.code})`}`
       if (event.phase === 'fallback') ctx.logger.warn(text)
