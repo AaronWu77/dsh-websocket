@@ -21,7 +21,7 @@ test('unsupported protocol, proxies, custom compat and renamed reasoning efforts
   }
 })
 test('unbounded or unsafe retry policies are rejected before route registration', () => {
-  for (const retryPolicy of [{ mode: 'always' as const }, { mode: 'normal' as const, retryableCodes: ['OUTCOME_UNKNOWN'] }, { mode: 'normal' as const, retryableCodes: ['AUTH'] }]) {
+  for (const retryPolicy of [{ mode: 'always' as const }, ...['OUTCOME_UNKNOWN', 'UPSTREAM_SERVER_ERROR', 'UPSTREAM_RATE_LIMIT', 'AUTH'].map(code => ({ mode: 'normal' as const, retryableCodes: [code] }))]) {
     const declaration = Config({ providers: { fixture: { baseURL: 'http://127.0.0.1:1/v1', apiKeyEnv: 'KEY', models: [{ id: 'gpt-fixture', contextWindow: 100, maxTokens: 10 }], retryPolicy } } })
     assert.throws(() => resolveRoutes(declaration), /finite retries/)
   }

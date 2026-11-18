@@ -202,8 +202,8 @@ export function resolveRoutes(config: Config): ReadonlyMap<string, GatewayRoute>
     }
     if (id.trim().length === 0) throw new LlmError('A GPT gateway route needs a non-empty id.', 'INVALID_CONFIG')
     const cfg = structuredClone(raw)
-    if (cfg.retryPolicy?.mode === 'always' || cfg.retryPolicy?.mode === 'normal' && cfg.retryPolicy.retryableCodes?.some(code => ['OUTCOME_UNKNOWN', 'AUTH', 'QUOTA', 'ABORTED', 'INVALID_REQUEST'].includes(code))) {
-      throw new LlmError(`GPT gateway "${id}" requires finite retries excluding unknown outcomes, authentication, quota, cancellation and invalid requests.`, 'INVALID_CONFIG')
+    if (cfg.retryPolicy?.mode === 'always' || cfg.retryPolicy?.mode === 'normal' && cfg.retryPolicy.retryableCodes?.some(code => ['OUTCOME_UNKNOWN', 'UPSTREAM_SERVER_ERROR', 'UPSTREAM_RATE_LIMIT', 'AUTH', 'QUOTA', 'ABORTED', 'INVALID_REQUEST'].includes(code))) {
+      throw new LlmError(`GPT gateway "${id}" requires finite retries excluding unknown outcomes, post-submit upstream failures, authentication, quota, cancellation and invalid requests.`, 'INVALID_CONFIG')
     }
     const url = new URL(cfg.baseURL)
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {

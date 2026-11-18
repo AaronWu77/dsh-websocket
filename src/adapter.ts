@@ -10,8 +10,8 @@ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { Model } from '@earendil-works/pi-ai'
 import { createGatewayModel } from './config.ts'
 import type { GatewayRoute } from './config.ts'
-import { ConnectionPool, diagnosticReasoningEffort, isResponsesTerminal, ResponsesTransport } from './transport.ts'
-import type { AttemptFacts } from './transport.ts'
+import { classifyProviderFailure, ConnectionPool, diagnosticReasoningEffort, isResponsesTerminal, ResponsesTransport } from './transport.ts'
+import type { AttemptFacts, TransportFailure } from './transport.ts'
 import { Circuit } from './circuit.ts'
 import { fingerprint } from './continuation.ts'
 import { randomUUID } from 'node:crypto'
@@ -47,10 +47,12 @@ export interface RequestDiagnostic {
   outcome: 'running' | 'success' | 'error' | 'aborted'; code?: string; attempts: AttemptFacts[]
   /** One final reported snapshot, omitted entirely when no usable counters were reported. */
   usage?: RequestDiagnosticUsage
+  /** Allowlisted code reported by the upstream service, when available. */
+  providerErrorCode?: NonNullable<TransportFailure['providerErrorCode']>
 }
 interface RequestState {
   transport?: ResponsesTransport; started: boolean; route?: GatewayRoute; mode?: 'auto' | 'sse'; options?: GenerateOptions
-  diagnostic?: RequestDiagnostic; usage?: RequestDiagnosticUsage | undefined; circuitLease?: ReturnType<Circuit['admit']>
+  diagnostic?: RequestDiagnostic; usage?: RequestDiagnosticUsage | undefined; providerFailure?: TransportFailure | undefined; circuitLease?: ReturnType<Circuit['admit']>
 }
 interface Lease { cancel: () => Promise<void>; settled: Promise<void> }
 interface DiscoveryState { models: readonly Model<'openai-responses'>[]; expiresAt: number; pending?: Promise<void>; error?: 'discovery-failed' }
@@ -284,7 +286,10 @@ export class GatewayAdapter extends LlmAdapter {
     const withRequestOptions = <T extends StreamOptions>(options: T | undefined) => {
       const onProviderStreamEvent: NonNullable<StreamOptions['onProviderStreamEvent']> = (data, model) => {
         const event = record(data)
-        if (event && isResponsesTerminal(event.type)) state.usage = terminalUsage(event.response)
+        if (event && isResponsesTerminal(event.type)) {
+          state.usage = terminalUsage(event.response)
+          state.providerFailure = event.type === 'response.failed' ? classifyProviderFailure(record(event.response)?.error, false) : undefined
+        }
         return options?.onProviderStreamEvent?.(data, model)
       }
       return { ...options, fetch: requestFetch(options), maxRetries: 0, onProviderStreamEvent }
@@ -425,7 +430,7 @@ export class GatewayAdapter extends LlmAdapter {
       options.signal?.throwIfAborted()
       for await (const chunk of dispatch(options)) {
         if (chunk.type === 'finish') {
-          const failure = state.transport?.failure
+          const failure = state.transport?.failure ?? state.providerFailure
           terminal = failure === undefined || chunk.reason.kind !== 'error'
             ? chunk
             : { ...chunk, reason: { kind: 'error', failure: { code: failure.code, message: failure.message, ...failure.status === undefined ? {} : { status: failure.status } } } }
@@ -449,6 +454,8 @@ export class GatewayAdapter extends LlmAdapter {
         if (state.diagnostic) {
           state.diagnostic.endedAt = Date.now()
           if (state.usage !== undefined) state.diagnostic.usage = state.usage
+          const providerErrorCode = (state.transport?.failure ?? state.providerFailure)?.providerErrorCode
+          if (!success && providerErrorCode !== undefined) state.diagnostic.providerErrorCode = providerErrorCode
           state.diagnostic.outcome = success ? 'success' : terminal?.type === 'finish' && terminal.reason.kind === 'aborted' ? 'aborted' : 'error'
           state.diagnostic.code = state.transport?.failure?.code ?? (terminal?.type === 'finish' && (terminal.reason.kind === 'error' || terminal.reason.kind === 'aborted') ? terminal.reason.failure?.code : undefined)
         }

@@ -188,7 +188,7 @@ test('recent requests default to five requests across gateways and summarize the
   const comparison = { kind: 'item-mismatch', inputLength: 8, previousInputLength: 6, previousOutputLength: 1, firstDifference: { index: 6, section: 'prior-output', previousType: 'message', currentType: 'message', fields: [{ name: 'phase', previousPresent: true, currentPresent: false }] } }
   const requests = [
     request(0, 'gpt-oldest'), request(7, 'gpt-title', { purpose: 'session-title' }),
-    request(3, 'gpt-sse', { attempts: [sse] }), request(5, 'gpt-rebuild', { requestedReasoningEffort: 'high', usage: { inputTokens: 0, outputTokens: 21, cacheReadTokens: 88_580 }, attempts: [ws, { ...ws, delta: false, requestBytes: 1_520_435, resetReason: 'context-changed', continuationComparison: comparison }] }),
+    request(3, 'gpt-sse', { attempts: [sse], outcome: 'error', code: 'UPSTREAM_SERVER_ERROR', providerErrorCode: 'server_error' }), request(5, 'gpt-rebuild', { requestedReasoningEffort: 'high', usage: { inputTokens: 0, outputTokens: 21, cacheReadTokens: 88_580 }, attempts: [ws, { ...ws, delta: false, requestBytes: 1_520_435, resetReason: 'context-changed', continuationComparison: comparison }] }),
     request(8, 'gpt-other-route', { provider: 'other-ws' }), request(1, 'gpt-excluded'),
     request(4, 'gpt-fallback', { attempts: [{ ...sse, fallbackReason: 'TRANSPORT' }] }),
     request(2, 'gpt-include'), request(6, 'gpt-latest', { purpose: 'agent' }),
@@ -224,6 +224,9 @@ test('recent requests default to five requests across gateways and summarize the
   assert.equal(detail.getByText(zh.requestedReasoningEffort!, { selector: 'dt' }).nextElementSibling?.textContent, 'high')
   assert.equal(detail.getByText(zh.changedFields!, { selector: 'dt' }).nextElementSibling?.textContent, 'phase (' + zh.fieldPresent + ' → ' + zh.fieldAbsent + ')')
   assert.equal(detail.getAllByText(zh.sentReasoningEffort!, { selector: 'dt' }).length, 2)
+  fireEvent.click(direct)
+  const outcome = within(direct!.parentElement!).getByText(zh.outcome!, { selector: 'dt' }).nextElementSibling
+  assert.match(outcome?.textContent ?? '', /UPSTREAM_SERVER_ERROR · server_error/u)
   fireEvent.click(fallback)
   assert.equal(within(fallback!.parentElement!).getByText(zh.fallbackReason!, { selector: 'dt' }).nextElementSibling?.textContent, 'TRANSPORT')
   fireEvent.change(ui.getByLabelText(zh.filterRoute!), { target: { value: '' } })

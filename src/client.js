@@ -90,7 +90,7 @@ window.__ModuleLoader__.load({
           h('span', { className: 'ws-sr' }, t('requestDetails'))),
         h('div', { className: 'ws-attempts' },
           h('dl', { className: 'ws-facts ws-detail-facts' },
-            h(Fact, { label: t('outcome') }, t(row.outcome), row.code ? ' · ' + row.code : ''),
+            h(Fact, { label: t('outcome') }, t(row.outcome), row.code ? ' · ' + row.code : '', row.providerErrorCode ? ' · ' + row.providerErrorCode : ''),
             h(Fact, { label: t('session') }, row.sessionId ?? '—'),
             h(Fact, { label: t('purpose') }, mainRequest(row) ? t('conversation') : row.purpose),
             h(Fact, { label: t('requestedReasoningEffort') }, row.requestedReasoningEffort ?? t('notSpecified'))),

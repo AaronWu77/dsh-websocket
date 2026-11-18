@@ -48,6 +48,8 @@ New connections cannot assume the previous connection's `store: false` cache exi
 
 Eligible WS failures count even when same-attempt SSE fallback succeeds. After `fallbackAfterFailures` failures, new attempts use SSE for `fallbackCooldownMs`. Expiry does not start background work: one subsequent request probes WS while concurrent requests stay on SSE. WS success resets the circuit; SSE success does not. Authentication and quota errors do not count as WS connection faults. Only finite retry policies excluding unknown outcomes and permanent refusals are accepted; the existing DSH retry executor owns transient retries.
 
+A structured Responses `server_error` on a failed WS/SSE terminal, or a standalone WS error frame after submission, reports `UPSTREAM_SERVER_ERROR`. It does not count as a connection failure, change protocols, or trigger automatic replay, even when no output was received. A rate-limit error in a generation terminal is likewise not replayed (`UPSTREAM_RATE_LIMIT`). An HTTP 5xx that rejects the WS upgrade before a generation is sent remains `SERVER` and can use the configured finite retry policy. Request details show allowlisted provider error codes without storing provider error text.
+
 Each request owns its cancellation and parser. Successful terminals return healthy connections to the pool; cancellation, consumer return and failed streams close the affected socket. Plugin disposal rejects new calls, drains admitted iterators including paused consumers, and closes idle connections. Cleanup failures are surfaced in diagnostics and logs. Settings reset closes idle connections and resets cooling without interrupting active requests. No global fetch, dispatcher, WebSocket constructor or server prototype is replaced.
 
 ## Configuration

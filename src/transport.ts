@@ -7,10 +7,11 @@ import type { WebSocket } from 'ws'
 import { Continuation, fingerprint, object } from './continuation.ts'
 import type { ContinuationComparison, JsonObject, ResetReason } from './continuation.ts'
 
-export type TransportFailureCode = 'AUTH' | 'QUOTA' | 'RATE_LIMIT' | 'INVALID_REQUEST' | 'SERVER' | 'TRANSPORT' | 'TIMEOUT' | 'ABORTED' | 'OUTCOME_UNKNOWN' | 'MALFORMED_RESPONSE' | 'CONTINUATION_MISSING'
-/** Failures contain safe messages, never raw upstream bodies or headers. */
+export type TransportFailureCode = 'AUTH' | 'QUOTA' | 'RATE_LIMIT' | 'INVALID_REQUEST' | 'SERVER' | 'UPSTREAM_SERVER_ERROR' | 'UPSTREAM_RATE_LIMIT' | 'TRANSPORT' | 'TIMEOUT' | 'ABORTED' | 'OUTCOME_UNKNOWN' | 'MALFORMED_RESPONSE' | 'CONTINUATION_MISSING'
+type ProviderErrorCode = 'server_error' | 'rate_limit_exceeded' | 'insufficient_quota' | 'billing_hard_limit_reached' | 'invalid_api_key'
+/** Failures contain safe messages and allowlisted provider codes, never raw upstream bodies or headers. */
 export class TransportFailure extends Error {
-  constructor(readonly code: TransportFailureCode, message: string, readonly fallbackAllowed = false, readonly status?: number) { super(message); this.name = 'TransportFailure' }
+  constructor(readonly code: TransportFailureCode, message: string, readonly fallbackAllowed = false, readonly status?: number, readonly providerErrorCode?: ProviderErrorCode) { super(message); this.name = 'TransportFailure' }
 }
 type DiagnosticReasoningEffort = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
@@ -76,15 +77,31 @@ function failedHandshake(status: number): TransportFailure {
   if (status === 429) return new TransportFailure('RATE_LIMIT', 'The gateway rate-limited the Responses connection.', false, status)
   return new TransportFailure(status >= 500 ? 'SERVER' : 'INVALID_REQUEST', 'The gateway rejected the Responses upgrade.', [404, 405, 426, 501].includes(status), status)
 }
-function providerFailure(value: unknown): TransportFailure {
+/**
+ * Classify a structured Responses error without retaining provider text.
+ * @param value - Wire error object, optionally wrapped with status and error fields.
+ * @param beforeResponse - An explicit WS rejection before any response event; not a failed terminal or SSE stream error.
+ * @returns Recognized provider failure, or undefined for the caller's existing fallback classification.
+ */
+export function classifyProviderFailure(value: unknown, beforeResponse: boolean): TransportFailure | undefined {
   const item = object(value) ?? {}
   const error = object(item.error) ?? item
-  const status = typeof item.status === 'number' ? item.status : undefined
-  if (error.code === 'previous_response_not_found') return new TransportFailure('CONTINUATION_MISSING', 'The gateway no longer has this continuation.', false, status)
-  if (error.code === 'insufficient_quota' || error.code === 'billing_hard_limit_reached') return new TransportFailure('QUOTA', 'The gateway account quota is exhausted; review provider usage before retrying.', false, status)
-  if (status === 401 || status === 403 || error.code === 'invalid_api_key') return new TransportFailure('AUTH', 'The gateway rejected the Responses credential.', false, status)
-  if (status === 429 || error.code === 'rate_limit_exceeded') return new TransportFailure('RATE_LIMIT', 'The gateway rate-limited the Responses request.', false, status)
-  return new TransportFailure(status !== undefined && status >= 500 ? 'SERVER' : 'INVALID_REQUEST', 'The gateway rejected the Responses request; check its model and request settings.', false, status)
+  const status = typeof item.status === 'number' && Number.isInteger(item.status) && item.status >= 400 && item.status <= 599 ? item.status : undefined
+  const code = error.code
+  if (code === 'insufficient_quota' || code === 'billing_hard_limit_reached') return new TransportFailure('QUOTA', 'The gateway account quota is exhausted; review provider usage before retrying.', false, status, code)
+  if (status === 401 || status === 403 || code === 'invalid_api_key') return new TransportFailure('AUTH', 'The gateway rejected the Responses credential.', false, status, code === 'invalid_api_key' ? code : undefined)
+  if (status === 429 || code === 'rate_limit_exceeded') return new TransportFailure(beforeResponse ? 'RATE_LIMIT' : 'UPSTREAM_RATE_LIMIT', beforeResponse
+    ? 'The gateway rate-limited the Responses request.' : 'The upstream service rate-limited a submitted request. Check provider usage before retrying.', false, status, code === 'rate_limit_exceeded' ? code : undefined)
+  if (code === 'server_error' || (status !== undefined && status >= 500)) return new TransportFailure('UPSTREAM_SERVER_ERROR', 'The upstream service failed a submitted request. Check provider usage before retrying.', false, status, code === 'server_error' ? code : undefined)
+  return undefined
+}
+
+function wsProviderFailure(value: unknown, beforeResponse: boolean): TransportFailure {
+  const item = object(value)
+  const error = object(item?.error) ?? item
+  const status = typeof item?.status === 'number' ? item.status : undefined
+  if (error?.code === 'previous_response_not_found') return new TransportFailure('CONTINUATION_MISSING', 'The gateway no longer has this continuation.', false, status)
+  return classifyProviderFailure(value, beforeResponse) ?? new TransportFailure('INVALID_REQUEST', 'The gateway rejected the Responses request; check its model and request settings.', false, status)
 }
 /** @param type - Untrusted Responses event discriminant. @returns Whether the event is terminal. */
 export function isResponsesTerminal(type: unknown): boolean {
@@ -312,13 +329,13 @@ export class ResponsesTransport {
           if (item.type === 'message') {
             const value = object(item.message)
             if (!value || typeof value.type !== 'string') throw new TransportFailure('MALFORMED_RESPONSE', 'The gateway returned a Responses event without a type.')
-            if (value.type === 'error') { this.providerRejected = true; throw providerFailure(value) }
+            if (value.type === 'error') { this.providerRejected = true; throw wsProviderFailure(value, !this.generated) }
             this.generated = true
             return { ...value, type: value.type }
           }
           if (item.type === 'error') {
             if (item.error.error !== undefined) {
-              const error = providerFailure(item.error.error)
+              const error = wsProviderFailure(item.error.error, !this.generated)
               // Only an explicit pre-generation missing-parent rejection permits one full rebuild.
               if (error.code === 'CONTINUATION_MISSING' && plan.delta && !this.generated) {
                 channel.chain.reset(); plan = { body: { ...payload, stream: undefined, background: undefined, previous_response_id: undefined }, delta: false, reason: 'cache-miss' }; send(); continue

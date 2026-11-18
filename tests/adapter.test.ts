@@ -366,6 +366,74 @@ test('an unsupported WS handshake preserves semantic DSH output through SSE fall
   assert.equal(client.diagnostics().requests[0]!.attempts.length, 1, 'the handshake rejection sent no WS body')
 })
 
+test('a rejected WebSocket upgrade reports SERVER before sending a generation', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const gateway = await wireFixture(t, { status: 503 })
+  const { client } = adapter(t, gateway.baseURL)
+  const finish = (await collect(client.stream(request()))).at(-1)
+  assert.ok(finish?.type === 'finish' && finish.reason.kind === 'error')
+  assert.equal(finish.reason.failure.code, 'SERVER')
+  assert.equal(finish.reason.failure.status, 503)
+  const policy = client.providerRetryPolicy('gateway-ws')
+  assert.equal(policy.mode, 'normal')
+  assert.ok(policy.retryableCodes.includes('SERVER'))
+  assert.equal(gateway.upgrades.length, 1)
+  assert.equal(gateway.posts.length, 0)
+  assert.deepEqual(client.diagnostics().requests[0]?.attempts, [])
+})
+
+for (const transport of ['auto', 'sse'] as const) {
+  const frames = ['failed-without-output', 'failed-after-output', 'error-frame'] as const
+  for (const frame of transport === 'auto' ? frames : frames.slice(0, 2)) {
+    test(`overload on ${transport} (${frame}) stays a provider failure without replay`, { timeout: CASE_TIMEOUT_MS }, async t => {
+      const gateway = await wireFixture(t, { events: (model, text) => {
+        const error = { code: 'server_error', message: 'fixture private upstream detail' }
+        if (frame === 'error-frame') return [{ type: 'error', ...error }]
+        const progress = frame === 'failed-after-output' ? responseEvents(model, text).slice(0, 3) : []
+        return [...progress, { type: 'response.failed', sequence_number: 5, response: { id: 'resp_fixture', model, status: 'failed', output: [], error } }]
+      } })
+      const { client } = adapter(t, gateway.baseURL, undefined, undefined, { transport, fallbackAfterFailures: 1 })
+      const chunks = await collect(client.stream(request()))
+      const finish = chunks.at(-1)
+      assert.ok(finish?.type === 'finish' && finish.reason.kind === 'error')
+      assert.equal(finish.reason.failure.code, 'UPSTREAM_SERVER_ERROR')
+      assert.doesNotMatch(finish.reason.failure.message, /fixture private/)
+      assert.equal(chunks.some(chunk => chunk.type === 'text-delta'), frame === 'failed-after-output')
+      assert.equal(finish.replayState, undefined)
+      const policy = client.providerRetryPolicy('gateway-ws')
+      assert.equal(policy.mode, 'normal')
+      assert.equal(policy.retryableCodes.includes(finish.reason.failure.code), false)
+      const diagnostics = client.diagnostics()
+      assert.deepEqual(diagnostics.requests.map(row => [row.code, row.providerErrorCode, row.attempts.map(attempt => [attempt.transport, attempt.fallbackReason])]),
+        [['UPSTREAM_SERVER_ERROR', 'server_error', [[transport === 'auto' ? 'websocket' : 'sse', undefined]]]])
+      assert.equal(diagnostics.routes[0]?.circuit.failures, 0)
+      assert.equal(gateway.posts.length, transport === 'sse' ? 1 : 0)
+      if (transport === 'auto') {
+        assert.equal(gateway.upgrades.length, 1)
+        await assertClosed(await gateway.nextCreate())
+      } else assert.equal(gateway.upgrades.length, 0)
+    })
+  }
+}
+
+test('structured terminal codes distinguish rate limiting, quota, authentication, and unknown failures', { timeout: CASE_TIMEOUT_MS }, async t => {
+  let wireCode = ''
+  const gateway = await wireFixture(t, { events: model => [{ type: 'response.failed', response: { model, status: 'failed', output: [], error: { code: wireCode, message: 'fixture text' } } }] })
+  const { client } = adapter(t, gateway.baseURL, undefined, undefined, { transport: 'sse' })
+  for (const [code, expected, safeCode] of [
+    ['rate_limit_exceeded', 'UPSTREAM_RATE_LIMIT', 'rate_limit_exceeded'],
+    ['insufficient_quota', 'QUOTA', 'insufficient_quota'],
+    ['invalid_api_key', 'AUTH', 'invalid_api_key'],
+    ['arbitrary_upstream_value', 'PI_AI_ERROR', undefined],
+  ] as const) {
+    wireCode = code
+    const finish = (await collect(client.stream(request()))).at(-1)
+    assert.ok(finish?.type === 'finish' && finish.reason.kind === 'error')
+    assert.equal(finish.reason.failure.code, expected)
+    assert.equal(client.diagnostics().requests.at(-1)?.providerErrorCode, safeCode)
+  }
+  assert.equal(gateway.posts.length, 4)
+})
+
 test('a generation with unknown outcome retains OUTCOME_UNKNOWN after PI error conversion', { timeout: CASE_TIMEOUT_MS }, async t => {
   const gateway = await wireFixture(t, { onCreate: sent => sent.socket.close(1011, 'fixture unknown outcome') })
   const { client } = adapter(t, gateway.baseURL)
