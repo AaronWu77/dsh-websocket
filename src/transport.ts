@@ -6,6 +6,8 @@ import type { ResponsesClientEvent } from 'openai/resources/responses/responses'
 import type { WebSocket } from 'ws'
 import { Continuation, fingerprint, object } from './continuation.ts'
 import type { ContinuationComparison, JsonObject, ResetReason } from './continuation.ts'
+import { codexRequest } from './request-format.ts'
+import type { CodexRequestFormat } from './request-format.ts'
 
 export type TransportFailureCode = 'AUTH' | 'QUOTA' | 'RATE_LIMIT' | 'INVALID_REQUEST' | 'SERVER' | 'UPSTREAM_SERVER_ERROR' | 'UPSTREAM_RATE_LIMIT' | 'TRANSPORT' | 'TIMEOUT' | 'ABORTED' | 'OUTCOME_UNKNOWN' | 'MALFORMED_RESPONSE' | 'CONTINUATION_MISSING'
 type ProviderErrorCode = 'server_error' | 'rate_limit_exceeded' | 'insufficient_quota' | 'billing_hard_limit_reached' | 'invalid_api_key'
@@ -38,20 +40,24 @@ export interface AttemptFacts {
   sentReasoningEffort?: DiagnosticReasoningEffort | 'none'
   /** Positive integer max_output_tokens in the outbound payload. */
   maxOutputTokens?: number
+  /** Whether the actual outbound body includes nonempty top-level instructions. */
+  hasTopLevelInstructions?: true
 }
 
-function wireControls(body: JsonObject): Pick<AttemptFacts, 'sentReasoningEffort' | 'maxOutputTokens'> {
+function wireControls(body: JsonObject): Pick<AttemptFacts, 'sentReasoningEffort' | 'maxOutputTokens' | 'hasTopLevelInstructions'> {
   const effort = object(body.reasoning)?.effort
   const sentReasoningEffort = effort === 'none' ? 'none' : diagnosticReasoningEffort(effort)
   const maxOutputTokens = body.max_output_tokens
   return {
     ...sentReasoningEffort === undefined ? {} : { sentReasoningEffort },
+    ...typeof body.instructions === 'string' && body.instructions.length > 0 ? { hasTopLevelInstructions: true } : {},
     ...typeof maxOutputTokens === 'number' && Number.isSafeInteger(maxOutputTokens) && maxOutputTokens > 0 ? { maxOutputTokens } : {},
   }
 }
 
 export interface ResponsesTransportOptions {
   mode: 'auto' | 'sse'
+  requestFormat?: 'standard' | CodexRequestFormat
   baseURL: string
   apiKey: string
   signal: AbortSignal
@@ -277,17 +283,24 @@ export class ResponsesTransport {
       throw new TransportFailure('INVALID_REQUEST', 'The scoped transport accepts only this gateway\'s Responses POST.')
     }
     const raw = await request.clone().text()
-    const payload = object(JSON.parse(raw))
-    if (!payload || typeof payload.model !== 'string') throw new TransportFailure('INVALID_REQUEST', 'The serialized Responses request has no model.')
+    const serialized = object(JSON.parse(raw))
+    if (!serialized || typeof serialized.model !== 'string') throw new TransportFailure('INVALID_REQUEST', 'The serialized Responses request has no model.')
+    const format = this.options.requestFormat
+    const transformed = format !== undefined && format !== 'standard'
+    const payload = transformed ? codexRequest(serialized, format) : serialized
+    const body = transformed ? JSON.stringify(payload) : raw
     const sse = (fallback?: TransportFailure) => {
       this.options.report({ transport: 'sse', phase: fallback ? 'fallback' : 'request', ...fallback ? { code: fallback.code } : {} })
-      const bytes = Buffer.byteLength(raw)
+      const bytes = Buffer.byteLength(body)
       this.options.onAttempt?.({
         transport: 'sse', requestBytes: bytes, fullBytes: bytes, delta: false, reused: false,
         ...fallback === undefined ? {} : { fallbackReason: fallback.code },
         ...wireControls(payload),
       })
-      return globalThis.fetch(request)
+      if (!transformed) return globalThis.fetch(request)
+      const headers = new Headers(request.headers)
+      headers.delete('content-length')
+      return globalThis.fetch(new Request(request, { body, headers }))
     }
     if (this.options.mode === 'sse') return sse()
     try {

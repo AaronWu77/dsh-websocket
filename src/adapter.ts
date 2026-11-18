@@ -271,7 +271,7 @@ export class GatewayAdapter extends LlmAdapter {
       state.route = route
       state.mode = mode
       state.transport = new ResponsesTransport({
-        mode, baseURL: cfg.baseURL, apiKey: options.apiKey,
+        mode, requestFormat: cfg.requestFormat, baseURL: cfg.baseURL, apiKey: options.apiKey,
         signal: options.signal ?? this.lifetime.signal, callerSignal: state.options?.signal,
         connectTimeoutMs: cfg.websocketConnectTimeoutMs, closeTimeoutMs: cfg.closeTimeoutMs,
         maxFrameBytes: cfg.maxFrameBytes, maxBufferedEvents: cfg.maxBufferedEvents,

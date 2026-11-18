@@ -1,4 +1,8 @@
 {
+  "requestFormat": "请求格式",
+  "requestFormatStandard": "标准 Responses",
+  "requestFormatCodex": "Codex 风格 Responses（实验）",
+  "requestFormatCodexInstructions": "顶层 instructions（实验）",
   "title": "WebSocket 网关",
   "intro": "配置 Responses 网关，查看实际请求。",
   "refresh": "刷新状态",

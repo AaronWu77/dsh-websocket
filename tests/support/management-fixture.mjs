@@ -46,6 +46,15 @@ export function apply(ctx) {
     const disabledDiscovery = await tool.execute({ action: 'refresh', provider: 'fixture-ws' }, exec)
     assert.equal(disabledDiscovery.discovery, 'disabled')
     assert.deepEqual(disabledDiscovery.models.map(row => row.id), ['gpt-fixture'])
+    const addedExperiment = await service.run({ action: 'save', create: true, provider: 'fixture-codex-ws', revision: deleted.revision,
+      config: { ...initialRoute, displayName: 'Fixture Codex WS', requestFormat: 'codex' } }, 'user')
+    assert.deepEqual(addedExperiment.providers.find(row => row.id === 'fixture-ws').config, initialRoute)
+    assert.equal(initialRoute.requestFormat, 'standard')
+    assert.equal(addedExperiment.providers.find(row => row.id === 'fixture-codex-ws').config.requestFormat, 'codex')
+    assert.equal((await ctx.llm.resolveModelInfo('fixture-codex-ws', 'gpt-fixture')).id, 'gpt-fixture')
+    const removedExperiment = await service.run({ action: 'delete', provider: 'fixture-codex-ws', revision: addedExperiment.revision }, 'user')
+    assert.equal(removedExperiment.revision, deleted.revision)
+    assert.equal(ctx.llm.listProviders().some(row => row.id === 'fixture-codex-ws'), false)
     const merge = { action: 'merge-models', provider: 'fixture-ws', source: 'fixture-source', sourceFingerprint: source.fingerprint, revision: deleted.revision, models: ['gpt-inherited'] }
     await assert.rejects(service.run(merge, 'agent'), { code: 'user-only' })
     await assert.rejects(service.run({ ...merge, models: ['gpt-inherited', 'gpt-inherited'] }, 'user'), { code: 'invalid-model-selection' })

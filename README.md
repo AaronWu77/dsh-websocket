@@ -59,6 +59,7 @@ The entry's `providers` dictionary is live-editable; its keys are new provider i
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `transport` | `auto` | WS preferred or `sse` only |
+| `requestFormat` | `standard` | `codex` encodes leading developer instructions as typed Responses input blocks and makes automatic tool choice explicit when tools exist. Keeps the gateway endpoint, credentials, session cache key, continuation and SSE fallback; no Codex Connect dependency. `codex-instructions` instead moves the first developer message into top-level `instructions` from the first request and sends it on every frame, including deltas. Use it on a separate route; cache behavior is provider-dependent. |
 | `reuseConnection`, `continuation` | `true` | Independent retention and delta controls |
 | `connectionIdleMs`, `connectionMaxAgeMs` | `300000`, `3000000` | Idle/max age; maximum configured age is below 60 minutes |
 | `maxConnections`, `maxContinuationBytes` | `8`, `1048576` | Retained connections per route generation / fingerprint bytes per connection |

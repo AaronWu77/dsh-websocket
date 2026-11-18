@@ -1,4 +1,8 @@
 {
+  "requestFormat": "Request format",
+  "requestFormatStandard": "Standard Responses",
+  "requestFormatCodex": "Codex-style Responses (experimental)",
+  "requestFormatCodexInstructions": "Top-level instructions (experimental)",
   "title": "WebSocket gateways",
   "intro": "Configure Responses gateways and review actual requests.",
   "refresh": "Refresh status",
