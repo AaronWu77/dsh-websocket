@@ -1,9 +1,9 @@
 {
   "name": "dsh-websocket",
   "displayName": "dsh-Websocket",
-  "version": "0.3.0-local.1",
+  "version": "0.4.0-local.5",
   "private": true,
-  "description": "WebSocket-first GPT Responses gateways with scoped SSE fallback.",
+  "description": "GPT Responses gateways with session WebSocket continuation, safe SSE recovery and live settings.",
   "repository": { "type": "git", "url": "git+https://github.com/AaronWu77/dsh-websocket.git" },
   "homepage": "https://github.com/AaronWu77/dsh-websocket",
   "bugs": { "url": "https://github.com/AaronWu77/dsh-websocket/issues" },
@@ -14,18 +14,21 @@
   "types": "lib/index.d.ts",
   "exports": {
     ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
+    "./client": "./lib/client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
   "files": ["lib", "locale", "icon.svg", "cordis.patch.yml", "README.md", "README.zh.md", "LICENSE"],
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-settings"] } },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "build:check": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "test:profile": "tsx tests/support/run-gateway-headless.ts",
-    "check": "pnpm run build && pnpm run build:check && pnpm test"
+    "test:lifecycle": "tsx tests/support/run-gateway-lifecycle.ts",
+    "check": "pnpm run build && pnpm run build:check && pnpm test",
+    "check:isolated": "pnpm run check && pnpm run test:profile && pnpm run test:lifecycle"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",
@@ -47,6 +50,10 @@
     "@deepseek-ai/dsh-llm": "link:../../../packages/llm/llm",
     "@deepseek-ai/dsh-llm-pi-ai": "link:../../../packages/llm/llm-pi-ai",
     "@deepseek-ai/schemastery": "link:../../../vendor/schemastery",
+    "@deepseek-ai/dsh-settings": "link:../../../packages/settings/settings",
+    "@deepseek-ai/dsh-config-editor": "link:../../../packages/boot/config-editor",
+    "@deepseek-ai/dsh-client-connection": "link:../../../packages/client/connection",
+    "@deepseek-ai/dsh-tools": "link:../../../packages/core/tools",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.20.5",

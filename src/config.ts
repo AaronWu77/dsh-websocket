@@ -25,6 +25,8 @@ export interface GatewayDiscoveryConfig {
   exclude: string[]
   timeoutMs: number
   ttlMs: number
+  maxResponseBytes: number
+  maxModels: number
 }
 
 /** One separately named API-key route. Timing and size limits are configurable. */
@@ -33,6 +35,15 @@ export interface GatewayConfig {
   baseURL: string
   apiKeyEnv: string
   transport: 'auto' | 'sse'
+  reuseConnection: boolean
+  continuation: boolean
+  connectionIdleMs: number
+  connectionMaxAgeMs: number
+  maxConnections: number
+  maxContinuationBytes: number
+  diagnosticsLimit: number
+  sourceProvider?: string
+  sourceFingerprint?: string
   headers: Record<string, string>
   /** Default effort for requests without a selection; every adopted model declaration must support it. */
   reasoning?: ModelThinkingLevel
@@ -87,12 +98,23 @@ const discoverySchema: z<GatewayDiscoveryInput, GatewayDiscoveryConfig> = z.obje
   exclude: z.array(z.string()).default([]),
   timeoutMs: positive().default(10_000),
   ttlMs: positive().default(300_000),
+  maxResponseBytes: positive().default(4_194_304),
+  maxModels: positive().max(10_000).default(1000),
 })
-const gatewaySchema: z<GatewayInput, GatewayConfig> = z.object({
+export const gatewaySchema: z<GatewayInput, GatewayConfig> = z.object({
   displayName: z.string(),
   baseURL: z.string().required(),
   apiKeyEnv: z.string().role('credential-ref').required(),
   transport: z.union(['auto', 'sse']).default('auto'),
+  reuseConnection: z.boolean().default(true),
+  continuation: z.boolean().default(true),
+  connectionIdleMs: positive().default(300_000),
+  connectionMaxAgeMs: positive().max(3_540_000).default(3_000_000),
+  maxConnections: positive().max(128).default(8),
+  maxContinuationBytes: positive().max(16_777_216).default(1_048_576),
+  diagnosticsLimit: positive().max(1000).default(100),
+  sourceProvider: z.string(),
+  sourceFingerprint: z.string(),
   headers: z.dict(z.string()).default({}),
   reasoning: z.union([z.const('off'), effort]),
   models: z.array(modelSchema).default([]),
@@ -168,9 +190,10 @@ export function createGatewayModel(
 export function resolveRoutes(config: Config): ReadonlyMap<string, GatewayRoute> {
   if (Object.keys(config).some(key => key !== 'providers')) throw new LlmError('GPT gateway configuration accepts only providers.', 'INVALID_CONFIG')
   const routes = new Map<string, GatewayRoute>()
-  const allowedGatewayKeys = ['displayName', 'baseURL', 'apiKeyEnv', 'transport', 'headers', 'reasoning', 'models', 'discover', 'discovery', 'fallbackAfterFailures', 'fallbackCooldownMs', 'websocketConnectTimeoutMs', 'closeTimeoutMs', 'streamIdleTimeoutMs', 'maxFrameBytes', 'maxBufferedEvents', 'maxRequestImageBytes', 'maxRequestImages', 'imageOffloadCountQuantum', 'requestImagePixelBudget', 'requestImageMaxBytes', 'supportsMaxOutputTokens', 'retryPolicy']
+  if (Object.keys(config.providers).length > 128) throw new LlmError('At most 128 standalone gateway routes may be configured.', 'INVALID_CONFIG')
+  const allowedGatewayKeys = ['reuseConnection', 'continuation', 'connectionIdleMs', 'connectionMaxAgeMs', 'maxConnections', 'maxContinuationBytes', 'diagnosticsLimit', 'sourceProvider', 'sourceFingerprint', 'displayName', 'baseURL', 'apiKeyEnv', 'transport', 'headers', 'reasoning', 'models', 'discover', 'discovery', 'fallbackAfterFailures', 'fallbackCooldownMs', 'websocketConnectTimeoutMs', 'closeTimeoutMs', 'streamIdleTimeoutMs', 'maxFrameBytes', 'maxBufferedEvents', 'maxRequestImageBytes', 'maxRequestImages', 'imageOffloadCountQuantum', 'requestImagePixelBudget', 'requestImageMaxBytes', 'supportsMaxOutputTokens', 'retryPolicy']
   const allowedModelKeys = ['id', 'name', 'contextWindow', 'maxTokens', 'input', 'reasoningEfforts']
-  const allowedDiscoveryKeys = ['contextWindow', 'maxTokens', 'input', 'reasoningEfforts', 'exclude', 'timeoutMs', 'ttlMs']
+  const allowedDiscoveryKeys = ['maxResponseBytes', 'maxModels', 'contextWindow', 'maxTokens', 'input', 'reasoningEfforts', 'exclude', 'timeoutMs', 'ttlMs']
   for (const [id, raw] of Object.entries(config.providers)) {
     if (Object.keys(raw).some(key => !allowedGatewayKeys.includes(key))
       || raw.models.some(model => Object.keys(model).some(key => !allowedModelKeys.includes(key)))
@@ -179,6 +202,9 @@ export function resolveRoutes(config: Config): ReadonlyMap<string, GatewayRoute>
     }
     if (id.trim().length === 0) throw new LlmError('A GPT gateway route needs a non-empty id.', 'INVALID_CONFIG')
     const cfg = structuredClone(raw)
+    if (cfg.retryPolicy?.mode === 'always' || cfg.retryPolicy?.mode === 'normal' && cfg.retryPolicy.retryableCodes?.some(code => ['OUTCOME_UNKNOWN', 'AUTH', 'QUOTA', 'ABORTED', 'INVALID_REQUEST'].includes(code))) {
+      throw new LlmError(`GPT gateway "${id}" requires finite retries excluding unknown outcomes, authentication, quota, cancellation and invalid requests.`, 'INVALID_CONFIG')
+    }
     const url = new URL(cfg.baseURL)
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
       throw new LlmError(`GPT gateway "${id}" needs an HTTP(S) base URL without credentials, query or fragment.`, 'INVALID_CONFIG')

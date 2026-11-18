@@ -6,7 +6,8 @@ import type { Socket } from 'node:net'
 import { test } from 'node:test'
 import type { TestContext } from 'node:test'
 import { WebSocket, WebSocketServer } from 'ws'
-import { LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { Context } from '@deepseek-ai/cordis'
+import { LlmError, LlmRuntime, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { GatewayAdapter } from '../src/adapter.ts'
 import type { GatewayAdapterOptions } from '../src/adapter.ts'
@@ -65,10 +66,15 @@ function sendEvents(request: WireRequest, text = 'fixture answer'): void {
   for (const event of responseEvents(String(request.payload.model), text)) request.socket.send(JSON.stringify(event))
 }
 
-async function wireFixture(t: TestContext, options: { status?: number; onCreate?: (request: WireRequest) => void } = {}) {
+async function wireFixture(t: TestContext, options: {
+  status?: number
+  onCreate?: (request: WireRequest) => void
+  events?: typeof responseEvents
+} = {}) {
+  const events = options.events ?? responseEvents
   const requests = new Queue<WireRequest>()
   const upgrades: IncomingMessage[] = []
-  const posts: Array<{ headers: IncomingMessage['headers']; payload: JsonRecord }> = []
+  const posts: Array<{ headers: IncomingMessage['headers']; payload: JsonRecord; bytes: number }> = []
   const connections: Array<{ socket: WebSocket; closed: Promise<void> }> = []
   const rawSockets = new Map<Socket, Promise<void>>()
   const errors: unknown[] = []
@@ -84,10 +90,11 @@ async function wireFixture(t: TestContext, options: { status?: number; onCreate?
     request.on('error', error => errors.push(error))
     request.on('end', () => {
       try {
-        const payload = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
-        posts.push({ headers: request.headers, payload })
+        const body = Buffer.concat(chunks)
+        const payload = record(JSON.parse(body.toString('utf8')))
+        posts.push({ headers: request.headers, payload, bytes: body.byteLength })
         response.writeHead(200, { 'content-type': 'text/event-stream' })
-        response.end(responseEvents(String(payload.model), 'fixture answer').map(event => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`).join(''))
+        response.end(events(String(payload.model), 'fixture answer').map(event => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`).join(''))
       } catch (error: unknown) {
         errors.push(error)
         response.writeHead(500).end()
@@ -112,8 +119,9 @@ async function wireFixture(t: TestContext, options: { status?: number; onCreate?
         try {
           const received = { ...connection, headers: request.headers, payload: record(JSON.parse(data.toString())) }
           requests.push(received)
-          if (options.onCreate === undefined) sendEvents(received)
-          else options.onCreate(received)
+          if (options.onCreate === undefined) {
+            for (const event of events(String(received.payload.model), 'fixture answer')) ws.send(JSON.stringify(event))
+          } else options.onCreate(received)
         } catch (error: unknown) {
           errors.push(error)
           ws.terminate()
@@ -243,8 +251,74 @@ test('the public adapter serializes a user request through PI and maps WS output
   await assertClosed(sent)
 })
 
-test('a persistent WS failure opens an SSE circuit after the configured threshold', { timeout: CASE_TIMEOUT_MS }, async t => {
-  const gateway = await wireFixture(t, { status: 401 })
+for (const mode of ['websocket', 'sse', 'fallback'] as const) {
+  test(`reports only final safe token counts over ${mode}`, { timeout: CASE_TIMEOUT_MS }, async t => {
+    const cases: { usage: JsonRecord | undefined; expected: JsonRecord | undefined }[] = [
+      { usage: { input_tokens: 40, output_tokens: 7, input_tokens_details: { cached_tokens: 12, cache_write_tokens: 5 } },
+        expected: { inputTokens: 23, outputTokens: 7, cacheReadTokens: 12, cacheWriteTokens: 5 } },
+      { usage: { input_tokens: 0, output_tokens: 0, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } },
+        expected: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { usage: { input_tokens: 9, input_tokens_details: { cached_tokens: 3 } }, expected: { inputTokens: 6, cacheReadTokens: 3 } },
+      { usage: { input_tokens: 9, output_tokens: 0 }, expected: { inputTokens: 9, outputTokens: 0 } },
+      { usage: { input_tokens: Number.MAX_SAFE_INTEGER + 1, output_tokens: 1.25, input_tokens_details: { cached_tokens: -1, cache_write_tokens: 'fixture-private-value' } }, expected: undefined },
+      { usage: { input_tokens: 2, output_tokens: 0, input_tokens_details: { cached_tokens: 3 } }, expected: { outputTokens: 0, cacheReadTokens: 3 } },
+      { usage: { input_tokens: 2, input_tokens_details: { cached_tokens: null, cache_write_tokens: 0 } }, expected: { cacheWriteTokens: 0 } },
+      { usage: undefined, expected: undefined },
+    ]
+    let responseIndex = 0
+    const gateway = await wireFixture(t, {
+      ...mode === 'fallback' ? { status: 404 } : {},
+      events: (model, text) => {
+        const events = responseEvents(model, text)
+        record(events[0]!.response).usage = { input_tokens: 900, output_tokens: 900 }
+        const response = record(events.at(-1)!.response)
+        const usage = cases[responseIndex++]!.usage
+        if (usage === undefined) delete response.usage
+        else response.usage = { ...usage, debug: 'fixture-private-value', total_tokens: 900 }
+        return events
+      },
+    })
+    const { client } = adapter(t, gateway.baseURL, ['gateway-ws'], undefined, {
+      fallbackAfterFailures: 0,
+      ...mode === 'sse' ? { transport: 'sse' } : {},
+    })
+    for (const { expected } of cases) {
+      const chunks = await collect(client.stream(request()))
+      const finish = chunks.at(-1)
+      assert.ok(finish?.type === 'finish' && finish.reason.kind === 'stop')
+      const diagnostics = client.diagnostics()
+      const row = diagnostics.requests.at(-1)!
+      assert.equal(row.attempts.length, 1)
+      const attempt = row.attempts[0]!
+      assert.equal(attempt.transport, mode === 'websocket' ? 'websocket' : 'sse')
+      assert.equal(Object.hasOwn(attempt, 'fallbackReason'), mode === 'fallback')
+      assert.equal(Object.hasOwn(row, 'usage'), expected !== undefined)
+      assert.deepEqual(row.usage, expected)
+      assert.doesNotMatch(JSON.stringify(row), /fixture-private-value|fixture answer|integration input|credential:gateway-ws/u)
+    }
+    assert.equal(responseIndex, cases.length)
+    assert.equal(gateway.upgrades.length, mode === 'sse' ? 0 : cases.length)
+    assert.equal(gateway.posts.length, mode === 'websocket' ? 0 : cases.length)
+  })
+}
+
+test('a later terminal snapshot replaces an earlier SSE snapshot without merging or summing counters', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const gateway = await wireFixture(t, { events: (model, text) => {
+    const events = responseEvents(model, text)
+    const first = events.at(-1)!
+    return [...events, { ...first, sequence_number: 5, response: { ...record(first.response), usage: { output_tokens: 0 } } }]
+  } })
+  const { client } = adapter(t, gateway.baseURL, ['gateway-ws'], undefined, { transport: 'sse' })
+  const chunks = await collect(client.stream(request()))
+  const finish = chunks.at(-1)
+  assert.ok(finish?.type === 'finish' && finish.reason.kind === 'stop')
+  const { requests } = client.diagnostics()
+  assert.equal(requests.length, 1)
+  assert.deepEqual(requests[0]!.usage, { outputTokens: 0 })
+})
+
+test('repeated unsupported upgrades cool WS even when same-attempt SSE fallback succeeds', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const gateway = await wireFixture(t, { status: 404 })
   const raw = declaration(gateway.baseURL)
   raw.providers['gateway-ws'].fallbackAfterFailures = 5
   raw.providers['gateway-ws'].fallbackCooldownMs = 60_000
@@ -261,12 +335,15 @@ test('a persistent WS failure opens an SSE circuit after the configured threshol
     await collect(client.stream(request()))
   }
   assert.equal(gateway.upgrades.length, 5)
-  assert.equal(gateway.posts.length, 0)
+  assert.equal(gateway.posts.length, 5)
   assert.deepEqual(openings, [{ provider: 'gateway-ws', failures: 5 }])
 
   assertSuccess(await collect(client.stream(request())))
   assert.equal(gateway.upgrades.length, 5, 'the sixth attempt uses SSE instead of another upgrade')
-  assert.equal(gateway.posts.length, 1)
+  assert.equal(gateway.posts.length, 6)
+  const diagnostics = client.diagnostics().requests
+  assert.deepEqual(diagnostics.slice(0, 5).map(row => row.attempts.map(attempt => attempt.fallbackReason)), Array.from({ length: 5 }, () => ['INVALID_REQUEST']))
+  assert.equal(Object.hasOwn(diagnostics[5]!.attempts[0]!, 'fallbackReason'), false)
   assert.equal(reports.some(report => report.event.transport === 'sse' && report.event.phase === 'request'), true)
 })
 
@@ -280,6 +357,13 @@ test('an unsupported WS handshake preserves semantic DSH output through SSE fall
   assert.equal(gateway.posts[0]!.payload.type, undefined)
   assert.deepEqual(gateway.posts[0]!.payload.input, [{ role: 'user', content: [{ type: 'input_text', text: 'integration input' }] }])
   assert.deepEqual(reports, [{ provider: 'gateway-ws', event: { transport: 'sse', phase: 'fallback', code: 'INVALID_REQUEST' } }])
+  const [attempt] = client.diagnostics().requests[0]!.attempts
+  assert.ok(attempt)
+  assert.equal(attempt.transport, 'sse')
+  assert.equal(attempt.fallbackReason, 'INVALID_REQUEST')
+  assert.equal(attempt.requestBytes, gateway.posts[0]!.bytes)
+  assert.equal(attempt.fullBytes, gateway.posts[0]!.bytes)
+  assert.equal(client.diagnostics().requests[0]!.attempts.length, 1, 'the handshake rejection sent no WS body')
 })
 
 test('a generation with unknown outcome retains OUTCOME_UNKNOWN after PI error conversion', { timeout: CASE_TIMEOUT_MS }, async t => {
@@ -478,24 +562,34 @@ function reasoningRoute(overrides: Partial<GatewayInput> = {}): Partial<GatewayI
 for (const mode of ['websocket', 'sse', 'fallback'] as const) {
   test(`reasoning defaults and explicit overrides survive ${mode}`, { timeout: CASE_TIMEOUT_MS }, async t => {
     const gateway = await wireFixture(t, mode === 'fallback' ? { status: 404 } : {})
-    const { client } = adapter(t, gateway.baseURL, ['gateway-ws'], undefined, reasoningRoute({ reasoning: 'high', transport: mode === 'sse' ? 'sse' : 'auto' }))
-    assert.equal((await client.resolveModel('gateway-ws', 'gpt-fixture')).reasoning?.defaultEffort, 'high')
-    assertSuccess(await collect(client.stream(request())))
-    const prepared = await client.prepareCall('gateway-ws', 'gpt-fixture')
-    assertSuccess(await collect(prepared.stream({ ...request(), reasoningEffort: ReasoningEffortId('xhigh') })))
-    if (mode === 'websocket') {
-      const first = await gateway.nextCreate(), second = await gateway.nextCreate()
-      assert.deepEqual(first.payload.reasoning, { effort: 'high', summary: 'auto' })
-      assert.deepEqual(second.payload.reasoning, { effort: 'xhigh', summary: 'auto' })
-      assert.deepEqual(second.payload.include, ['reasoning.encrypted_content'])
-      await assertClosed(first); await assertClosed(second)
-      assert.equal(gateway.posts.length, 0)
-    } else {
-      assert.equal(gateway.posts.length, 2)
-      assert.deepEqual(gateway.posts[0]!.payload.reasoning, { effort: 'high', summary: 'auto' })
-      assert.deepEqual(gateway.posts[1]!.payload.reasoning, { effort: 'xhigh', summary: 'auto' })
-      assert.deepEqual(gateway.posts[1]!.payload.include, ['reasoning.encrypted_content'])
-      assert.equal(gateway.upgrades.length, mode === 'fallback' ? 2 : 0)
+    const provider = 'gateway-ws'
+    const { client } = adapter(t, gateway.baseURL, [provider], undefined, reasoningRoute({ reasoning: 'xhigh', transport: mode === 'sse' ? 'sse' : 'auto' }))
+    assert.equal((await client.resolveModel(provider, 'gpt-fixture')).reasoning?.defaultEffort, 'xhigh')
+    const ctx = new Context()
+    const llm = new LlmRuntime(ctx)
+    t.after(llm.registerAdapter([provider], client))
+    for (const [selection, expected] of [[undefined, 'xhigh'], ['high', 'high'], ['max', 'max']] as const) {
+      const { messages, ...config } = request()
+      const prepared = await llm.prepareCall({ ...config, ...selection === undefined ? {} : { reasoningEffort: ReasoningEffortId(selection) } })
+      assert.equal(prepared.config.reasoningEffort, expected)
+      assert.equal(prepared.adapterDefaults.reasoningEffort, selection === undefined ? true : undefined)
+      assertSuccess(await collect(prepared.stream({ ...prepared.config, messages })))
+      const created = mode === 'websocket' ? await gateway.nextCreate() : undefined
+      const sent = created ?? gateway.posts.at(-1)!
+      assert.deepEqual(sent.payload.reasoning, { effort: expected, summary: 'auto' })
+      assert.deepEqual(sent.payload.include, ['reasoning.encrypted_content'])
+      assert.equal(sent.payload.max_output_tokens, 64)
+      const diagnostic = client.diagnostics().requests.at(-1)!
+      assert.equal(diagnostic.requestedReasoningEffort, expected)
+      assert.deepEqual(diagnostic.attempts.map(attempt => [attempt.transport, attempt.sentReasoningEffort, attempt.maxOutputTokens]), [
+        [mode === 'websocket' ? 'websocket' : 'sse', expected, 64],
+      ])
+      if (created !== undefined) await assertClosed(created)
+    }
+    if (mode === 'websocket') assert.equal(gateway.posts.length, 0)
+    else {
+      assert.equal(gateway.posts.length, 3)
+      assert.equal(gateway.upgrades.length, mode === 'fallback' ? 3 : 0)
     }
   })
 }
@@ -508,6 +602,27 @@ test('reasoning capabilities without a default do not synthesize an effort', { t
   const sent = await gateway.nextCreate()
   assert.equal(sent.payload.reasoning, undefined)
   assert.equal(sent.payload.reasoning_effort, undefined)
+  const diagnostic = client.diagnostics().requests.at(-1)!
+  assert.equal(Object.hasOwn(diagnostic, 'requestedReasoningEffort'), false)
+  assert.equal(Object.hasOwn(diagnostic.attempts[0]!, 'sentReasoningEffort'), false)
+  await assertClosed(sent)
+})
+
+test('reasoning diagnostics omit an unsupported effort and a suppressed output cap', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const gateway = await wireFixture(t)
+  const { client } = adapter(t, gateway.baseURL, ['gateway-ws'], undefined, reasoningRoute({ supportsMaxOutputTokens: false }))
+  await assert.rejects(collect(client.stream({ ...request(), reasoningEffort: ReasoningEffortId('fixture-private-value') })), llmCode('UNSUPPORTED_REASONING_EFFORT'))
+  const rejected = client.diagnostics().requests.at(-1)!
+  assert.equal(Object.hasOwn(rejected, 'requestedReasoningEffort'), false)
+  assert.deepEqual(rejected.attempts, [])
+
+  assertSuccess(await collect(client.stream({ ...request(), reasoningEffort: ReasoningEffortId('high') })))
+  const sent = await gateway.nextCreate()
+  assert.equal(Object.hasOwn(sent.payload, 'max_output_tokens'), false)
+  const diagnostic = client.diagnostics().requests.at(-1)!
+  assert.equal(diagnostic.requestedReasoningEffort, 'high')
+  assert.equal(diagnostic.attempts[0]?.sentReasoningEffort, 'high')
+  assert.equal(Object.hasOwn(diagnostic.attempts[0]!, 'maxOutputTokens'), false)
   await assertClosed(sent)
 })
 

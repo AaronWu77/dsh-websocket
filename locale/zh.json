@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "dsh-Websocket",
-    "description": "为明确配置的 GPT Responses 网关优先使用 WebSocket，支持受控 SSE 回退及请求清理。"
+    "description": "配置 GPT 网关，复用会话 WebSocket，安全增量续接并查看 SSE 故障恢复。"
   }
 }

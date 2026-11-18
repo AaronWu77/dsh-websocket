@@ -6,7 +6,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Socket } from 'node:net'
 import { access, glob, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { WebSocketServer } from 'ws'
 import type { WebSocket } from 'ws'
 
@@ -40,6 +40,7 @@ async function endpoint(mode: 'websocket' | 'fallback') {
   const posted: JsonRecord[] = []
   const sent: JsonRecord[] = []
   const errors: unknown[] = []
+  const modelRequests: IncomingMessage[] = []
   const connections: Array<{ socket: WebSocket; closed: Promise<void> }> = []
   const tcp = new Map<Socket, Promise<void>>()
   const websocket = new WebSocketServer({ noServer: true })
@@ -49,8 +50,13 @@ async function endpoint(mode: 'websocket' | 'fallback') {
     request.on('error', error => errors.push(error))
     request.on('end', () => {
       try {
-        assert.equal(request.url, '/v1/responses')
         assert.equal(request.headers.authorization, 'Bearer offline-gateway-key')
+        if (request.method === 'GET' && request.url === '/v1/models') {
+          modelRequests.push(request)
+          response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'gpt-discovered' }] }))
+          return
+        }
+        assert.equal(request.url, '/v1/responses')
         const payload = jsonObject(JSON.parse(Buffer.concat(chunks).toString('utf8')))
         posted.push(payload)
         response.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -110,7 +116,7 @@ async function endpoint(mode: 'websocket' | 'fallback') {
   const address = server.address()
   assert.ok(address !== null && typeof address === 'object')
   return {
-    baseURL: `http://127.0.0.1:${address.port}/v1`, upgrades, posted, sent, errors, dispose,
+    baseURL: `http://127.0.0.1:${address.port}/v1`, upgrades, posted, sent, errors, modelRequests, dispose,
     waitClosed: async () => { await Promise.all(connections.map(connection => connection.closed)) },
   }
 }
@@ -124,8 +130,8 @@ function environment(home: string): NodeJS.ProcessEnv {
   return { ...env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1', FIXTURE_GATEWAY_KEY: 'offline-gateway-key' }
 }
 
-async function runHeadless(bin: string, root: string, overlay: string) {
-  const child = spawn(process.execPath, [bin, '--profile', 'headless', '--patch', overlay, TASK], {
+async function runHeadless(bin: string, root: string) {
+  const child = spawn(process.execPath, [bin, '--profile', 'headless', TASK], {
     cwd: root, env: environment(root), stdio: 'inherit',
   })
   let deadlineExpired = false
@@ -160,17 +166,29 @@ for (const mode of ['websocket', 'fallback'] as const) {
   const gateway = await endpoint(mode)
   const started = performance.now()
   try {
-    const overlay = join(root, 'gateway-overlay.json')
+    const profileDir = join(root, 'profiles', 'headless')
+    await mkdir(profileDir, { recursive: true })
+    const overlay = join(profileDir, 'cordis.patch.yml')
     const sessionRoot = join(root, 'recorded-sessions')
     await writeFile(overlay, JSON.stringify([
       { id: 'credentials', disabled: false, config: { dshHome: root, watch: false } },
       { id: 'session-persistence-jsonl', config: { root: sessionRoot, compression: 'none' } },
       { id: 'llm-deepseek', disabled: true },
       { id: 'llm-deepseek-account', disabled: true },
+      { id: 'llm-pi-ai', config: { providers: { 'fixture-source': {
+        api: 'openai-responses', baseURL: gateway.baseURL, apiKeyEnv: 'FIXTURE_GATEWAY_KEY', headers: { 'x-fixture-secret': 'secret-header-value' },
+        defaultMaxTokens: 2_048,
+        models: [
+          { id: 'gpt-fixture', contextWindow: 128_000, maxTokens: 1_024, reasoningEfforts: { high: 'high' } },
+          { id: 'gpt-inherited', reasoningEfforts: { high: 'high' } },
+          { id: 'gpt-not-copied', reasoningEfforts: { high: 'high' } },
+        ],
+      } } } },
+      { insert: [{ id: 'gateway-management-fixture', name: fileURLToPath(new URL('./management-fixture.mjs', import.meta.url)) }] },
       { id: 'agent-default-model', config: { provider: 'fixture-ws', model: 'gpt-fixture' } },
       {
         insert: [{
-          id: 'gpt-gateway-built-fixture', name: plugin,
+          id: 'gpt-gateway-built-fixture', name: pathToFileURL(plugin).href,
           config: { providers: { 'fixture-ws': {
             baseURL: gateway.baseURL, apiKeyEnv: 'FIXTURE_GATEWAY_KEY', transport: 'auto', reasoning: 'high',
             websocketConnectTimeoutMs: 3_000, closeTimeoutMs: 200, streamIdleTimeoutMs: 5_000,
@@ -180,7 +198,11 @@ for (const mode of ['websocket', 'fallback'] as const) {
         }],
       },
     ]))
-    await runHeadless(bin, root, overlay)
+    await runHeadless(bin, root)
+    const management = JSON.parse(await readFile(join(root, 'management-ok.json'), 'utf8'))
+    assert.equal(management.saved, true, 'the management fixture actually activated and completed')
+    assert.equal(management.merged, true, 'the real Loader composition added the selected model without replacing the route')
+    assert.equal(gateway.modelRequests.length, 1, 'preview and disabled refresh do not contact the gateway directory')
     assert.deepEqual(gateway.errors, [])
     assert.ok(gateway.upgrades.length >= 1)
     const payloads = mode === 'websocket' ? gateway.sent : gateway.posted

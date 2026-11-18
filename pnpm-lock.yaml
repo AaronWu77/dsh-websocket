@@ -24,6 +24,12 @@ importers:
       '@deepseek-ai/dsh-attachment':
         specifier: link:../../../packages/attachment/attachment
         version: link:../../../packages/attachment/attachment
+      '@deepseek-ai/dsh-client-connection':
+        specifier: link:../../../packages/client/connection
+        version: link:../../../packages/client/connection
+      '@deepseek-ai/dsh-config-editor':
+        specifier: link:../../../packages/boot/config-editor
+        version: link:../../../packages/boot/config-editor
       '@deepseek-ai/dsh-credentials':
         specifier: link:../../../packages/credentials/credentials
         version: link:../../../packages/credentials/credentials
@@ -33,6 +39,12 @@ importers:
       '@deepseek-ai/dsh-llm-pi-ai':
         specifier: link:../../../packages/llm/llm-pi-ai
         version: link:../../../packages/llm/llm-pi-ai
+      '@deepseek-ai/dsh-settings':
+        specifier: link:../../../packages/settings/settings
+        version: link:../../../packages/settings/settings
+      '@deepseek-ai/dsh-tools':
+        specifier: link:../../../packages/core/tools
+        version: link:../../../packages/core/tools
       '@deepseek-ai/schemastery':
         specifier: link:../../../vendor/schemastery
         version: link:../../../vendor/schemastery

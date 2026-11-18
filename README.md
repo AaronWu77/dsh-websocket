@@ -1,5 +1,5 @@
 ---
-description: "An opt-in bundle for separately named GPT Responses gateways using WebSocket first and bounded SSE fallback."
+description: "Manage standalone GPT Responses gateways with session WebSocket reuse, incremental continuation and bounded SSE recovery."
 kind: "package-bundle"
 ---
 
@@ -9,90 +9,96 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This Host-only bundle registers explicitly configured GPT Responses routes without changing DSH, Codex Connect, DeepSeek, or existing provider routes. Each model request prefers WebSocket in `auto` mode and may fall back to SSE before a generation request has been sent. Connections belong to one request and are closed before its terminal result. The default bundle declares no gateways; credentials are referenced through DSH's credential service.
+Use Settings → WebSocket gateways to configure separately named GPT Responses routes, copy compatible existing provider declarations, and inspect their actual transport and upload sizes. WebSocket connections can persist across serial session requests; exact context extensions use `previous_response_id` and new input only. Safe pre-generation failures may fall back to SSE. Existing providers, selected models and subagent model permissions remain unchanged. The bundle starts with no routes and uses the existing credential service.
 
 ## Table of contents
 
-- [Use this package](#use-this-package)
-- [Failures and cleanup](#failures-and-cleanup)
-- [Implementation](#implementation)
+- [Settings and adoption](#settings-and-adoption)
+- [Continuation and isolation](#continuation-and-isolation)
+- [Recovery and cleanup](#recovery-and-cleanup)
+- [Configuration](#configuration)
+- [Development and verification](#development-and-verification)
 - [Model experience](#model-experience)
 - [Known limitations](#known-limitations)
+- [Upgrade from 0.3](#upgrade-from-03)
 
-## Use this package
+## Settings and adoption
 
-Build this standalone package, validate it, and install its bundle through Harness Plugin Manager. Configure its plugin entry with a new route id rather than replacing an existing provider. This local candidate is not a claim of live gateway or production-profile acceptance; perform that acceptance before changing the default model.
+Install this bundle with Harness Plugin Manager after building and validating it. Settings → WebSocket gateways separates saved settings from recent requests. Choose a route from the desktop list or narrow-screen selector, edit its connection or models, and open advanced controls only when needed. Saving applies to new calls; admitted and prepared calls retain their captured configuration. Replacing a credential does not interrupt active calls. Deleting a route does not delete history or the original provider.
 
-Development links in the manifest assume this repository is located at `<DSH checkout>/local-plugins/plugins/dsh-websocket` and contain no machine-specific absolute paths. `pnpm run test:profile` uses a built DSH CLI; `GPT_GATEWAY_DSH_BIN` can select that entry explicitly. The profile test uses synthetic credentials and loopback endpoints, not a real account.
+Import previews local GPT Responses models without network requests. The preview identifies each context window and output token limit as model configuration, catalog metadata, a route default, or a built-in default. Copy a compatible source into a new route such as `source-ws`, or select missing models to add to an existing route on the same endpoint. Merging preserves the target credentials and settings. Unsupported model capabilities or unresolved limits need correction before importing. Import is a one-time copy: the preview does not verify WebSocket support, and later source changes do not sync automatically.
 
-```yaml
-providers:
-  my-gateway-ws:
-    displayName: My GPT gateway
-    baseURL: https://gateway.example.invalid/v1
-    apiKeyEnv: GATEWAY_API_KEY
-    transport: auto
-    # reasoning: high  # Optional route default when a request selects no effort.
-    discover: true
-    discovery:
-      contextWindow: 500000
-      maxTokens: 128000
-      input: [text, image]
-      reasoningEfforts: [high, xhigh, max]
-    fallbackAfterFailures: 5
-    fallbackCooldownMs: 300000
-    models:
-      - id: gpt-example
-        contextWindow: 500000
-        maxTokens: 128000
-        input: [text, image]
-        reasoningEfforts: [high, xhigh, max]
-```
+Credentials use named references, and the page can store a replacement through DSH's credential service. Secrets and stored header values are not returned to the browser. A blank header editor retains stored values; `{}` clears them. All mutations are revision-checked. Conflicts retain the draft. The management tool `websocket_gateway` shares describe/save/import/delete/refresh/reset operations; credential entry and billable verification remain owner-UI-only.
 
-The example is a declaration template, not a working endpoint. Store the key through the existing credential service, not in the bundle. `transport: sse` disables WS for that route. Only `gpt-` or `openai/gpt-` model ids are accepted; non-GPT ids, duplicate capabilities and unsupported configuration fields fail before route registration. Model effort names must match the gateway's actual Responses capabilities.
+Saved routes with model discovery enabled can refresh `${baseURL}/models` without inference. A failed refresh retains the last successful catalog and reports the failure; successful changes update the chat model selector. Explicit models win over discovered ids. `discovery.exclude` filters discovered ids only; remove an explicit model row to stop explicitly advertising it. Discovery supplies declared metadata because model-list endpoints do not establish context windows or reasoning capabilities. Explicit reasoning selections override the optional route default; omitting `reasoning` does not select the first advertised effort.
 
-`reasoning` optionally supplies a route default only when the request does not select an effort; an explicit request overrides it. Omit it to preserve the existing provider-default behavior: `reasoningEfforts` lists capabilities but does not select its first entry. A default must be supported by every explicit model and, when discovery is enabled, by its metadata template. Invalid defaults fail before route registration.
+Recent requests lists the latest five requests across gateways, including auxiliary calls. Open the controls below the list to filter or refresh, or expand a card for diagnostics. Filter all routes or include auxiliary calls to inspect more of the current process. Each card shows the final outbound attempt; details list every attempt, including the reasoning effort and output token limit when present. Reported token usage separates uncached input, output, cache reads, and cache writes; a dash means the gateway did not report a usable value. An SSE attempt is labeled as a fallback only if a WebSocket failure triggered it. Attempts also record full/incremental mode and safe failure codes. A failed history match reports prefix lengths and the first differing item type or allowlisted field presence, without recording payload values. Upload sizes count UTF-8 application JSON, including fallback and continuation-rebuild attempts. The reduction compares each recorded attempt with its equivalent full request; it is limited to retained recent requests, excludes transport framing/handshakes/TLS, and is not a billing estimate. Refresh status reads metadata only. The explicit verification action confirms permission before two small synthetic inference rounds; it checks remembered random text, WS use and incremental second-round dispatch without sending chat history.
 
-Responses carries the selected effort in `reasoning.effort`, including the WS `response.create` event; no `reasoning_effort` alias is synthesized. The existing model declarations do not offer `off` for reasoning-capable models. On a declaration without reasoning capabilities, `off` omits the effort rather than forcing an upstream `none` or promising that the server disables thinking.
+## Continuation and isolation
 
-With `discover: true`, the adapter also reads `${baseURL}/models` and appends every GPT text id that `models` does not list; image, audio, embedding and similar non-text ids are ignored. Explicit entries win and override metadata; `discovery.exclude` names ids the gateway lists but this route should not offer. The gateway model list carries no context-window or reasoning-level metadata, so `discovery` supplies defaults for discovered ids; add an explicit entry when a new model differs. Discovery is cached for `ttlMs`, a failure keeps the explicit models and logs a safe warning, and discovery is off by default.
+A live connection belongs to a route configuration generation, credential/header identity, model and session. Auxiliary requests without a main-session identity use request-owned connections. A busy session connection is not shared: a concurrent call uses a separate full-context SSE request. The adapter never multiplexes unrelated responses into one parser.
 
-After `fallbackAfterFailures` consecutive WebSocket failures (default 5; 0 disables), the route serves requests over SSE for `fallbackCooldownMs` (default 5 minutes). At the next cooldown expiry it makes one fresh WebSocket probe; a successful probe resets the failure count, while a failed probe reopens the SSE circuit. Failures that already fell back to SSE inside the same attempt do not count.
+The first round sends the complete pi-ai-serialized input. A completed response contributes its id and output fingerprints to a bounded, memory-only head. A later request uses a delta only when its full serialized input is an exact extension of that known input plus output and its request controls/tools match. The comparison normalizes completed function-call status, parsed function arguments, and empty assistant output-text `logprobs`. The transmitted items are not changed. Message phase, reasoning signatures, nonempty response metadata, item ids and array order remain significant. Unrecognized or mismatched output, compaction, edits and image offloading cause full-context rebuilds, not approximate prefix reuse. Session history remains complete and authoritative.
 
-The schema exposes handshake, stream-idle and close timeouts, frame and event-queue limits, image limits, and the ordinary DSH `retryPolicy`. Omitted retry policy uses DSH's finite normal policy; the plugin adds no separate retry loop. Existing provider routes remain available for rollback. The plugin does not change the selected model or subagent model allowlist.
+New connections cannot assume the previous connection's `store: false` cache exists. An explicit pre-generation `previous_response_not_found` rejection permits at most one full-context resend; ambiguous disconnects do not. Connection retention and incremental continuation are separate options. Disabling continuation still permits socket reuse; disabling reuse closes the socket with each request. Idle and maximum-age deadlines release pooled connections, and limits bound retained connections and history fingerprints.
 
-## Failures and cleanup
+## Recovery and cleanup
 
-`auto` can fall back after a recognized connection failure, an upgrade timeout, or an HTTP 404/405/426/501 upgrade rejection before sending `response.create`. Authentication failures, rate limits, cancellation and rejected generation requests do not trigger protocol switching. The same credential, endpoint and serialized request are retained for SSE; transport-only `stream` and `background` fields are removed only from the WS event.
+`auto` falls back to SSE only before a generation request is sent, after recognized connection failure, handshake timeout or HTTP 404/405/426/501 upgrade refusal. Authentication, quota, rate-limit and invalid-request failures do not switch protocols. Unconfirmed generation after sending, including partial-output disconnect or idle timeout, is `OUTCOME_UNKNOWN`: it may already have been billed and is not silently resent. Explicit cancellation remains cancellation.
 
-After sending a generation request, a connection drop with no provider event is `OUTCOME_UNKNOWN`, not a hidden SSE retry: generation may already be billed. Once provider events arrive, a truncated response fails without concatenating a second generation. The DSH adapter preserves stable transport failure codes so the existing retry policy owns any subsequent attempt.
+Eligible WS failures count even when same-attempt SSE fallback succeeds. After `fallbackAfterFailures` failures, new attempts use SSE for `fallbackCooldownMs`. Expiry does not start background work: one subsequent request probes WS while concurrent requests stay on SSE. WS success resets the circuit; SSE success does not. Authentication and quota errors do not count as WS connection faults. Only finite retry policies excluding unknown outcomes and permanent refusals are accepted; the existing DSH retry executor owns transient retries.
 
-Each request owns its connection, cancellation signal and bounded event queue. Normal completion, consumer return, cancellation and plugin disposal close owned sockets; disposal stops admission and waits for admitted iterators, including paused consumers. A close deadline terminates only this request's socket. A failure to finish cleanup is reported rather than treated as success.
+Each request owns its cancellation and parser. Successful terminals return healthy connections to the pool; cancellation, consumer return and failed streams close the affected socket. Plugin disposal rejects new calls, drains admitted iterators including paused consumers, and closes idle connections. Cleanup failures are surfaced in diagnostics and logs. Settings reset closes idle connections and resets cooling without interrupting active requests. No global fetch, dispatcher, WebSocket constructor or server prototype is replaced.
 
-Host diagnostics report route, selected transport, connection or fallback phase and safe failure code. They do not log keys, headers, prompts or response bodies. No global fetch, WebSocket constructor, dispatcher or server prototype is replaced.
+## Configuration
 
-## Implementation
+The entry's `providers` dictionary is live-editable; its keys are new provider ids, not aliases for existing routes. Each declaration requires `baseURL`, `apiKeyEnv`, and explicit GPT `models` or `discover: true`. Explicit models require `id`, `contextWindow`, `maxTokens`; optional `input` defaults to text and `reasoningEfforts` defaults to none. Only `gpt-` and `openai/gpt-` ids are accepted. Model and route metadata must match the actual gateway.
 
-[The manifest](package.json) declares the bundle and explicit SDK dependencies. [The patch](cordis.patch.yml) inserts one Host plugin with an empty route dictionary. [The adapter](src/adapter.ts) reuses DSH's public `PiAiAdapter` and a request-owned pi-ai Provider. [The transport](src/transport.ts) injects a scoped Fetch implementation into the existing Responses serializer and parser, using the official OpenAI Responses WS client and `ws` underneath.
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `transport` | `auto` | WS preferred or `sse` only |
+| `reuseConnection`, `continuation` | `true` | Independent retention and delta controls |
+| `connectionIdleMs`, `connectionMaxAgeMs` | `300000`, `3000000` | Idle/max age; maximum configured age is below 60 minutes |
+| `maxConnections`, `maxContinuationBytes` | `8`, `1048576` | Retained connections per route generation / fingerprint bytes per connection |
+| `fallbackAfterFailures`, `fallbackCooldownMs` | `5`, `300000` | WS fault threshold / SSE cooling; threshold 0 disables cooling |
+| `websocketConnectTimeoutMs`, `closeTimeoutMs`, `streamIdleTimeoutMs` | `10000`, `2000`, `300000` | Handshake, close and response idle deadlines |
+| `maxFrameBytes`, `maxBufferedEvents` | `8388608`, `128` | Received WS frame / bounded queued events |
+| `diagnosticsLimit` | `100` | Recent request records retained in memory |
+| `discovery.ttlMs`, `discovery.timeoutMs` | `300000`, `10000` | Discovery cache / request deadline |
+| `discovery.contextWindow`, `discovery.maxTokens` | `500000`, `128000` | Declared metadata for discovered ids |
+| `discovery.maxResponseBytes`, `discovery.maxModels` | `4194304`, `1000` | Response-byte / entry limits for model discovery |
+| `retryPolicy` | DSH finite normal policy | The UI exposes a finite maximum retry count |
+
+Image byte/count/pixel limits, custom headers, maximum-output compatibility and discovery metadata are editable in advanced sections. Config validates before registration. Unknown fields, duplicate capabilities, unsafe retry codes and an unsupported route-wide reasoning default reject activation or saving.
+
+## Development and verification
+
+Development links assume `<DSH checkout>/local-plugins/plugins/<this directory>`. The standalone package owns all implementation and test changes; no DSH source changes are required. The client factory uses the running GUI's React, locale, theme and slots. Owner-only authenticated Connection routes call the same Host management implementation as the tool. See [adapter](src/adapter.ts), [transport](src/transport.ts), [continuation](src/continuation.ts), [management](src/management.ts) and [client](src/client.js).
 
 ```text
 pnpm run build
 pnpm run build:check
 pnpm test
+pnpm run test:profile
+pnpm run test:lifecycle
 ```
 
-Tests use real loopback HTTP and WS listeners with dynamically allocated ports and deterministic teardown. A passing loopback test does not establish support by a real gateway. [The license](LICENSE) covers this plugin's original code; SDKs retain their own licenses. No implementation is copied from dsh-ws-deflate.
+`test:lifecycle` allocates a token-guarded temporary HMR profile and exercises install, old-to-new upgrade, failed-install recovery, queued-save/disposal contention, paused-stream unload and removal across fresh processes. It never targets the current GUI profile. It expects the old package in sibling `gpt-ws-gateway`, or `GATEWAY_PREVIOUS_BUNDLE`; `GATEWAY_CANDIDATE_BUNDLE` can select an immutable packed candidate. On this Windows/pnpm combination the test sets `UV_THREADPOOL_SIZE=1` only in its child processes to avoid pnpm's parallel parent-directory cleanup race. This is a tested workaround, not a fix to pnpm or proof that an in-place live upgrade is safe. Do not automatically remove or replace the running plugin; stage the verified artifact, obtain explicit deployment permission and plan a stopped-process upgrade with rollback available.
+
+The scratch profile explicitly denies install scripts from `@google/genai@2.21.0` and `protobufjs@7.6.6`, unrelated transitive SDK dependencies of the OpenAI-only fixture; it does not approve scripts. A real installation with undecided build policies can stop for a user decision. Do not copy the test policy into the running profile or approve builds automatically.
+
+Tests use loopback HTTP/WS listeners with dynamic ports, deterministic circuit clocks, actual pi-ai serialization, emitted-client component tests and scratch-profile Loader/management checks. `test:profile` uses a built DSH CLI; `GPT_GATEWAY_DSH_BIN` can select its path. Synthetic keys and isolated state prevent real-account inference. A passing local test does not establish support by a real gateway. The existing icon is retained; [LICENSE](LICENSE) covers original plugin code and SDKs retain their licenses.
 
 ## Model experience
 
-The plugin adds no system prompt, tool definition or user message. DSH and pi-ai continue to serialize history, images, thinking options and tool calls. WS and SSE feed the same Responses parser; usage precedes the terminal result. Moving a conversation to a newly registered route can discard provider-native replay metadata from the old adapter and change cache hits; history is not migrated or deleted. WS does not guarantee reduced token billing or lower latency. A configured reasoning default selects the same upstream parameter as an explicit effort and can affect token usage and latency.
+The management tool adds a bounded schema to agents whose composition provides tools; there is no additional system prompt or user message. Model history, tools, images and reasoning remain serialized by DSH/pi-ai. WS and SSE use the same Responses parser. Continuation changes uploaded JSON, not the authoritative history or billing rules. `store: false` remains unchanged. Native replay metadata can degrade when switching from an original adapter to a new WS route. A reasoning default can affect latency and token usage; no cost or latency reduction is guaranteed.
 
 ## Known limitations
 
-The first version does not pool connections or use WS continuation caches across requests. Every model call performs a fresh handshake. It supports ordinary API-key Responses gateways, not Codex OAuth or Chat Completions-only servers. Gateway-specific headers and model capabilities require explicit configuration.
+Only ordinary API-key GPT Responses routes are supported, not Codex OAuth, Chat Completions-only servers, other model families, proxies or shared-socket multiplexing. Import is deliberately conservative and is a snapshot, not a live reference to another adapter. Original providers keep their proxy and auth behavior; proxy-required routes must not be copied into this direct-only plugin. Server model metadata, WS cache lifetime and continuation compatibility require gateway-specific acceptance.
 
-Discovered models use `discovery` defaults because the gateway's `/v1/models` response does not provide context windows or reasoning levels. Discovery needs an OpenAI-compatible `/v1/models` endpoint and a resolvable credential; it does not make a model available if the gateway omits it, and a running process only refreshes after `ttlMs`.
+Continuation is memory-only and conservative. Process restart, credential/header changes or unmatched serialization rebuild full context. There is no cross-restart socket recovery or resumption of an in-flight generation. Diagnostic records are not durable session history; the full conversation remains in DSH. Real-account and rendered-browser acceptance must be reported separately from simulated and component checks. Disable this bundle or select the original provider to roll back.
 
-This version has no per-route proxy integration and does not inherit Codex Connect's proxy manager. Use it only for routes intended to connect directly. It neither changes nor bypasses a configured proxy on an existing provider: those original routes remain separate and untouched. Do not adopt a proxy-required route into this plugin until explicit proxy support is implemented and tested.
+## Upgrade from 0.3
 
-Real-account inference, browser presentation and active-profile installation require separate acceptance. Plugin API compatibility is pinned to the manifest's supported versions; DSH upgrades still require plugin compatibility checks. Switching back to the original provider or to `transport: sse` is the rollback path.
+Existing separately named routes and credentials remain valid. Session requests now retain connections and attempt exact incremental continuation by default; set `reuseConnection: false` and `continuation: false` for request-owned behavior. WS faults that successfully fell back to SSE now count toward cooling; authentication faults do not. Truncated generations are unknown outcomes rather than transient transport retries. Replace `retryPolicy.mode: always` or unsafe retry-code lists with a finite normal policy before upgrading. No provider ids or session data are migrated automatically.

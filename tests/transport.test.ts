@@ -365,7 +365,7 @@ test('closing after created and partial output fails that stream without appendi
       if (next.done) break
       chunks.push(next.value)
     }
-  }, failureCode('TRANSPORT'))
+  }, failureCode('OUTCOME_UNKNOWN'))
   const partial = Buffer.concat(chunks).toString('utf8')
   assert.match(partial, /response\.created/)
   assert.match(partial, /partial fixture text/)
