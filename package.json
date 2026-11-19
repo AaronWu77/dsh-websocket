@@ -1,7 +1,7 @@
 {
   "name": "dsh-websocket",
   "displayName": "dsh-Websocket",
-  "version": "0.4.0-local.8",
+  "version": "0.4.0-local.9.rc4.2",
   "private": true,
   "description": "Configure GPT gateways, reuse session WebSockets and inspect SSE recovery",
   "repository": {
@@ -16,7 +16,7 @@
   "license": "MIT",
   "engines": {
     "node": ">=24.9.0",
-    "dsh": "0.2.2-rc.1"
+    "dsh": "0.2.2-rc.4"
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -57,7 +57,8 @@
     "test:profile": "tsx tests/support/run-gateway-headless.ts",
     "test:lifecycle": "tsx tests/support/run-gateway-lifecycle.ts",
     "check": "pnpm run build && pnpm run build:check && pnpm test",
-    "check:isolated": "pnpm run check && pnpm run test:profile && pnpm run test:lifecycle"
+    "check:isolated": "pnpm run check && pnpm run test:profile && pnpm run test:lifecycle",
+    "prepack": "pnpm run build"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",
@@ -66,10 +67,10 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-attachment": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-credentials": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-llm-pi-ai": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-attachment": "0.2.2-rc.4",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.4",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.4",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.2-rc.4",
     "@deepseek-ai/schemastery": "3.19.0"
   },
   "devDependencies": {
@@ -87,5 +88,6 @@
     "@types/ws": "^8.18.1",
     "tsx": "^4.20.5",
     "typescript": "^5.9.3"
-  }
+  },
+  "packageManager": "pnpm@11.28.5"
 }
