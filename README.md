@@ -9,6 +9,8 @@ English | [中文](README.zh.md)
 
 ## Summary
 
+The notification overlay uses the renderer's selector hook with an explicit selector, including when no notification is pending.
+
 Use Settings → WebSocket gateways to configure separately named GPT Responses routes, copy compatible existing provider declarations, and inspect their actual transport and upload sizes. WebSocket connections can persist across serial session requests; exact context extensions use `previous_response_id` and new input only. Safe pre-generation failures may fall back to SSE. Existing providers, selected models and subagent model permissions remain unchanged. The bundle starts with no routes and uses the existing credential service.
 
 ## Table of contents

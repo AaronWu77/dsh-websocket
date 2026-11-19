@@ -53,7 +53,7 @@ window.__ModuleLoader__.load({
     const attemptMode = (t, attempt) => t(attempt.delta ? 'deltaBadge' : 'fullBadge');
 
     function Notice({ useNotice, clear }) {
-      const notice = useNotice();
+      const notice = useNotice(value => value);
       return notice ? h(Toast, { key: notice.sequence, text: notice.text, tone: notice.error ? undefined : 'success', onDone: () => clear(notice) }) : null;
     }
 

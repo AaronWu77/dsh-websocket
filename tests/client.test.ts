@@ -78,6 +78,18 @@ const preview = [
 const saved = { id: 'fixture-ws', config, credential: { configured: true }, sourceChanged: false }
 const state = { revision: 'r1', writable: true, sources: [{ provider: 'original', displayName: 'Original', eligible: true, fingerprint: 'source-1', preview }], providers: [saved], diagnostics: { routes: [], requests: [], cleanupFailures: [] } }
 
+test('notification overlay accepts the renderer selector hook with an empty or populated source', async t => {
+  const { registry, render, React } = await createUi(t, () => state)
+  const entry = registry.get('shell.overlay:dsh-websocket-notices')!
+  const useNotice = (selector: (value: { text: string; sequence: number } | undefined) => unknown) => selector(notice)
+  let notice: { text: string; sequence: number } | undefined
+  const overlay = render(React.createElement(entry.component, { useNotice, clear: () => {} }))
+  assert.equal(overlay.queryByRole('alert'), null)
+  notice = { text: 'Gateway settings saved', sequence: 1 }
+  overlay.rerender(React.createElement(entry.component, { useNotice, clear: () => {} }))
+  assert.equal(overlay.getByRole('alert').textContent, notice.text)
+})
+
 test('settings preserve a failed draft, review before writing models and confirm billable verification', async t => {
   const verifyResults = { state, websocket: true, delta: true }
   const { ui, fireEvent, waitFor, within, browserWindow, calls, notices, zh, dom, registry, render, React, disposers, cleanup } = await createUi(t, input => {
