@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "dsh-Websocket",
-    "description": "Configure GPT gateways, reuse session WebSockets, send safe incremental context and inspect SSE recovery."
+    "title": "WebSocket Gateway",
+    "description": "Configure GPT gateways, reuse session WebSockets and inspect SSE recovery"
   }
 }

@@ -3,24 +3,53 @@
   "displayName": "dsh-Websocket",
   "version": "0.4.0-local.8",
   "private": true,
-  "description": "GPT Responses gateways with session WebSocket continuation, safe SSE recovery and live settings.",
-  "repository": { "type": "git", "url": "git+https://github.com/AaronWu77/dsh-websocket.git" },
+  "description": "Configure GPT gateways, reuse session WebSockets and inspect SSE recovery",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AaronWu77/dsh-websocket.git"
+  },
   "homepage": "https://github.com/AaronWu77/dsh-websocket",
-  "bugs": { "url": "https://github.com/AaronWu77/dsh-websocket/issues" },
+  "bugs": {
+    "url": "https://github.com/AaronWu77/dsh-websocket/issues"
+  },
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=24.9.0", "dsh": "0.2.2-rc.1" },
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": "0.2.2-rc.1"
+  },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "exports": {
-    ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
     "./client": "./lib/client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
-  "files": ["lib", "locale", "icon.svg", "cordis.patch.yml", "README.md", "README.zh.md", "LICENSE"],
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-settings"] } },
+  "files": [
+    "lib",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "build:check": "tsc -p tsconfig.json --noEmit",
