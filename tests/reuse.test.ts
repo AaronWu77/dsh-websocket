@@ -82,6 +82,7 @@ test('three serialized rounds reuse one WS and upload only added context after c
   const b = await wire.call(history); history.push(replay(b.chunks), user('last')); await wire.call(history)
   assert.equal(wire.upgrades(), 1); assert.equal(wire.posts.length, 0)
   assert.equal(wire.messages[0]!.payload.previous_response_id, undefined)
+  assert.equal(Object.hasOwn(wire.messages[0]!.payload, 'client_metadata'), false)
   assert.equal(wire.messages[1]!.payload.previous_response_id, 'resp_1'); assert.equal(wire.messages[2]!.payload.previous_response_id, 'resp_2')
   assert.equal((wire.messages[1]!.payload.input as unknown[]).length, 1)
   const diagnostics = wire.adapter.diagnostics()
@@ -91,6 +92,23 @@ test('three serialized rounds reuse one WS and upload only added context after c
   assert.equal(diagnostics.routes[0]!.pool.busy, 0)
   await wire.adapter.dispose(); assert.equal(wire.adapter.diagnostics().routes[0]!.pool.connections, 0)
 })
+test('codex client metadata rides every WS frame, including deltas, without blocking continuation', { timeout: 15000 }, async t => {
+  const wire = await setup(t, { config: { clientMetadata: 'codex' } }), history = [user('first')], a = await wire.call(history, 'session-codex')
+  history.push(replay(a.chunks), user('next')); await wire.call(history, 'session-codex')
+  assert.equal(wire.messages.length, 2)
+  assert.equal(wire.messages[0]!.payload.previous_response_id, undefined)
+  assert.equal(wire.messages[1]!.payload.previous_response_id, 'resp_1')
+  for (const message of wire.messages) assert.deepEqual(object(message.payload.client_metadata), { session_id: 'session-codex' })
+  assert.equal(wire.upgrades(), 1); assert.equal(wire.posts.length, 0)
+})
+
+test('codex client metadata never reaches an SSE fallback body', { timeout: 15000 }, async t => {
+  const wire = await setup(t, { config: { clientMetadata: 'codex' }, rejectUpgrade: true })
+  await wire.call([user('fallback')], 'session-codex')
+  assert.equal(wire.messages.length, 0); assert.equal(wire.posts.length, 1)
+  assert.equal(Object.hasOwn(wire.posts[0]!, 'client_metadata'), false)
+})
+
 for (const { name, logprobs, delta } of [
   { name: 'empty output logprobs do not block continuation', logprobs: [], delta: true },
   { name: 'nonempty output logprobs require a full request if replay omits them', logprobs: [{ token: 'amber', logprob: -0.1, bytes: [97, 109, 98, 101, 114], top_logprobs: [] }], delta: false },

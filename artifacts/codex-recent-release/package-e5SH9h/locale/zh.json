@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-Websocket",
+    "description": "配置 GPT 网关，复用会话 WebSocket，安全增量续接并查看 SSE 故障恢复。"
+  }
+}

@@ -60,6 +60,7 @@ WS/SSE 的失败终态或提交请求后收到的独立 WS 错误帧包含 `serv
 | --- | --- | --- |
 | `transport` | `auto` | WS 优先或仅 `sse` |
 | `requestFormat` | `standard` | `codex` 将开头的开发者指令编码为带类型的 Responses 输入块，并在有工具时明确声明自动工具选择。网关地址、凭据、会话缓存 key、增量续接和 SSE 回退不变，无需 Codex Connect。`codex-instructions` 从首轮起将首条开发者消息移到顶层 `instructions`，之后每帧（含增量）均发送。请在独立路由上试用；缓存表现取决于上游。 |
+| `clientMetadata` | `off` | `codex` 把请求所属 DSH 会话的 `client_metadata.session_id` 合并进每一条 WebSocket `response.create` 帧（含增量续接帧），便于网关保持同一上游会话与 prompt cache key。SSE 回退请求体和续接指纹不变。仅对接受未知请求字段的网关开启。 |
 | `reuseConnection`、`continuation` | `true` | 独立控制连接保留和增量 |
 | `connectionIdleMs`、`connectionMaxAgeMs` | `300000`、`3000000` | 空闲／最长存活，允许配置的最长时间低于 60 分钟 |
 | `maxConnections`、`maxContinuationBytes` | `8`、`1048576` | 每个路由代次保留的连接数／每条连接指纹字节 |

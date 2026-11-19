@@ -6,7 +6,7 @@ import type { Socket } from 'node:net'
 import { test } from 'node:test'
 import type { TestContext } from 'node:test'
 import { WebSocket, WebSocketServer } from 'ws'
-import { ResponsesTransport, TransportFailure } from '../src/transport.ts'
+import { frameBody, ResponsesTransport, TransportFailure } from '../src/transport.ts'
 import type { ResponsesTransportOptions, TransportFailureCode } from '../src/transport.ts'
 
 const CASE_TIMEOUT_MS = 15_000
@@ -245,6 +245,47 @@ test('WS success preserves the serialized payload and closes without sending SSE
   assert.equal(gateway.upgrades.length, 1)
   assert.equal(gateway.posts.length, 0)
   assert.deepEqual(reports, [{ transport: 'websocket', phase: 'connected' }])
+  await assertClosed(request)
+})
+
+test('client metadata framing leaves bodies untouched unless Codex mode has a session id', () => {
+  const body = { model: 'gpt-fixture', input: 'input:gpt-fixture' }
+  assert.equal(frameBody(body, {}), body)
+  assert.equal(frameBody(body, { clientMetadata: 'off', sessionId: 'session-fixture' }), body)
+  assert.equal(frameBody(body, { clientMetadata: 'codex' }), body)
+  assert.deepEqual(frameBody(body, { clientMetadata: 'codex', sessionId: 'session-fixture' }), {
+    ...body, client_metadata: { session_id: 'session-fixture' },
+  })
+  assert.deepEqual(frameBody({ ...body, client_metadata: { turn: 'one' } }, { clientMetadata: 'codex', sessionId: 'session-fixture' }), {
+    ...body, client_metadata: { turn: 'one', session_id: 'session-fixture' },
+  })
+  assert.equal(Object.hasOwn(body, 'client_metadata'), false)
+})
+
+test('codex client metadata rides the WS response.create frame when the request has a session id', { timeout: CASE_TIMEOUT_MS }, async t => {
+  const gateway = await fixture(t, { onCreate: request => request.socket.send(JSON.stringify(completed(String(request.payload.model)))) })
+  const { client } = transport(t, gateway.baseURL, { clientMetadata: 'codex', sessionId: 'session-fixture' })
+  await (await dispatch(client, gateway.baseURL)).text()
+  const request = await gateway.nextCreate()
+  assert.deepEqual(request.payload, {
+    type: 'response.create', model: 'gpt-fixture', input: 'input:gpt-fixture', client_metadata: { session_id: 'session-fixture' },
+  })
+  assert.equal(gateway.posts.length, 0)
+  await assertClosed(request)
+})
+
+for (const scenario of [
+  { name: 'the default mode', overrides: {} },
+  { name: 'codex mode without a session id', overrides: { clientMetadata: 'codex' as const } },
+  { name: 'off mode with a session id', overrides: { clientMetadata: 'off' as const, sessionId: 'session-fixture' } },
+]) test(`WS frames omit client metadata for ${scenario.name}`, { timeout: CASE_TIMEOUT_MS }, async t => {
+  const gateway = await fixture(t, { onCreate: request => request.socket.send(JSON.stringify(completed(String(request.payload.model)))) })
+  const { client } = transport(t, gateway.baseURL, scenario.overrides)
+  await (await dispatch(client, gateway.baseURL)).text()
+  const request = await gateway.nextCreate()
+  assert.equal(Object.hasOwn(request.payload, 'client_metadata'), false)
+  assert.deepEqual(request.payload, { type: 'response.create', model: 'gpt-fixture', input: 'input:gpt-fixture' })
+  assert.equal(gateway.posts.length, 0)
   await assertClosed(request)
 })
 

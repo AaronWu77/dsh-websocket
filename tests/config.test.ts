@@ -48,6 +48,16 @@ test('schema defaults retain auto transport and the existing finite retry policy
   ])
 })
 
+test('client metadata framing is off by default and accepts only the Codex mode', () => {
+  assert.equal(resolveRoutes(Config(declaration())).get('fixture-ws')?.config.clientMetadata, 'off')
+  const codex = declaration()
+  Object.assign(codex.providers['fixture-ws'], { clientMetadata: 'codex' })
+  assert.equal(resolveRoutes(Config(codex)).get('fixture-ws')?.config.clientMetadata, 'codex')
+  const invalid = declaration()
+  Object.assign(invalid.providers['fixture-ws'], { clientMetadata: 'always' })
+  assert.throws(() => resolveRoutes(Config(invalid)))
+})
+
 test('a resolved route detaches endpoint, headers and model metadata from the input', () => {
   const validated = Config(declaration())
   const routes = resolveRoutes(validated)

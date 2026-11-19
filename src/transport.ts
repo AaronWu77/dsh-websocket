@@ -58,6 +58,10 @@ function wireControls(body: JsonObject): Pick<AttemptFacts, 'sentReasoningEffort
 export interface ResponsesTransportOptions {
   mode: 'auto' | 'sse'
   requestFormat?: 'standard' | CodexRequestFormat
+  /** `codex` adds client_metadata.session_id to every outbound WS frame; other values leave frames untouched. */
+  clientMetadata?: 'off' | 'codex'
+  /** Request session id used only for client metadata; never part of continuation fingerprints. */
+  sessionId?: string
   baseURL: string
   apiKey: string
   signal: AbortSignal
@@ -71,6 +75,17 @@ export interface ResponsesTransportOptions {
   poolKey?: string
   continuation?: boolean
   onAttempt?: (facts: AttemptFacts) => void
+}
+/**
+ * Add the Codex session hint to one outbound WS frame body.
+ * @param body - frame body assembled from the continuation plan.
+ * @param options - configured metadata mode and the request's session id.
+ * @returns the body itself when Codex metadata is off or the session id is absent, otherwise a copy with client_metadata.session_id merged in.
+ */
+export function frameBody(body: JsonObject, options: Pick<ResponsesTransportOptions, 'clientMetadata' | 'sessionId'>): JsonObject {
+  const sessionId = options.sessionId
+  if (options.clientMetadata !== 'codex' || sessionId === undefined) return body
+  return { ...body, client_metadata: { ...object(body.client_metadata), session_id: sessionId } }
 }
 function errno(error: unknown): string | undefined {
   if (!(error instanceof Error)) return undefined
@@ -320,10 +335,10 @@ export class ResponsesTransport {
       if (!reused) this.options.report({ transport: 'websocket', phase: 'connected' })
       let plan = channel.chain.plan(payload, Boolean(this.options.continuation && this.options.poolKey))
       const send = () => {
-        const create = { ...plan.body, type: 'response.create' as const }
+        const create = { ...frameBody(plan.body, this.options), type: 'response.create' as const }
         this.options.onAttempt?.({
           transport: 'websocket', requestBytes: Buffer.byteLength(JSON.stringify(create)),
-          fullBytes: Buffer.byteLength(JSON.stringify({ ...payload, stream: undefined, background: undefined, type: 'response.create' })),
+          fullBytes: Buffer.byteLength(JSON.stringify({ ...frameBody(payload, this.options), stream: undefined, background: undefined, type: 'response.create' })),
           delta: plan.delta, reused,
           ...plan.reason === undefined ? {} : { resetReason: plan.reason },
           ...plan.comparison === undefined ? {} : { continuationComparison: plan.comparison },

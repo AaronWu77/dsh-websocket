@@ -36,6 +36,8 @@ export interface GatewayConfig {
   apiKeyEnv: string
   transport: 'auto' | 'sse'
   requestFormat: 'standard' | 'codex' | 'codex-instructions'
+  /** Codex-compatible client metadata framing for gateways that need a stable upstream session. */
+  clientMetadata: 'off' | 'codex'
   reuseConnection: boolean
   continuation: boolean
   connectionIdleMs: number
@@ -108,6 +110,7 @@ export const gatewaySchema: z<GatewayInput, GatewayConfig> = z.object({
   apiKeyEnv: z.string().role('credential-ref').required(),
   transport: z.union(['auto', 'sse']).default('auto'),
   requestFormat: z.union(['standard', 'codex', 'codex-instructions']).default('standard'),
+  clientMetadata: z.union(['off', 'codex']).default('off'),
   reuseConnection: z.boolean().default(true),
   continuation: z.boolean().default(true),
   connectionIdleMs: positive().default(300_000),
@@ -193,7 +196,7 @@ export function resolveRoutes(config: Config): ReadonlyMap<string, GatewayRoute>
   if (Object.keys(config).some(key => key !== 'providers')) throw new LlmError('GPT gateway configuration accepts only providers.', 'INVALID_CONFIG')
   const routes = new Map<string, GatewayRoute>()
   if (Object.keys(config.providers).length > 128) throw new LlmError('At most 128 standalone gateway routes may be configured.', 'INVALID_CONFIG')
-  const allowedGatewayKeys = ['reuseConnection', 'continuation', 'connectionIdleMs', 'connectionMaxAgeMs', 'maxConnections', 'maxContinuationBytes', 'diagnosticsLimit', 'sourceProvider', 'sourceFingerprint', 'displayName', 'baseURL', 'apiKeyEnv', 'transport', 'requestFormat', 'headers', 'reasoning', 'models', 'discover', 'discovery', 'fallbackAfterFailures', 'fallbackCooldownMs', 'websocketConnectTimeoutMs', 'closeTimeoutMs', 'streamIdleTimeoutMs', 'maxFrameBytes', 'maxBufferedEvents', 'maxRequestImageBytes', 'maxRequestImages', 'imageOffloadCountQuantum', 'requestImagePixelBudget', 'requestImageMaxBytes', 'supportsMaxOutputTokens', 'retryPolicy']
+  const allowedGatewayKeys = ['reuseConnection', 'continuation', 'connectionIdleMs', 'connectionMaxAgeMs', 'maxConnections', 'maxContinuationBytes', 'diagnosticsLimit', 'sourceProvider', 'sourceFingerprint', 'displayName', 'baseURL', 'apiKeyEnv', 'transport', 'requestFormat', 'clientMetadata', 'headers', 'reasoning', 'models', 'discover', 'discovery', 'fallbackAfterFailures', 'fallbackCooldownMs', 'websocketConnectTimeoutMs', 'closeTimeoutMs', 'streamIdleTimeoutMs', 'maxFrameBytes', 'maxBufferedEvents', 'maxRequestImageBytes', 'maxRequestImages', 'imageOffloadCountQuantum', 'requestImagePixelBudget', 'requestImageMaxBytes', 'supportsMaxOutputTokens', 'retryPolicy']
   const allowedModelKeys = ['id', 'name', 'contextWindow', 'maxTokens', 'input', 'reasoningEfforts']
   const allowedDiscoveryKeys = ['maxResponseBytes', 'maxModels', 'contextWindow', 'maxTokens', 'input', 'reasoningEfforts', 'exclude', 'timeoutMs', 'ttlMs']
   for (const [id, raw] of Object.entries(config.providers)) {

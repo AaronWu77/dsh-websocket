@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
     const advanced = ['connectionIdleMs', 'connectionMaxAgeMs', 'maxConnections', 'maxContinuationBytes', 'diagnosticsLimit', 'websocketConnectTimeoutMs', 'streamIdleTimeoutMs', 'closeTimeoutMs', 'maxFrameBytes', 'maxBufferedEvents', 'maxRequestImageBytes', 'maxRequestImages', 'imageOffloadCountQuantum', 'requestImagePixelBudget', 'requestImageMaxBytes'];
     const clone = value => JSON.parse(JSON.stringify(value));
     const blankModel = () => ({ id: '', contextWindow: 500000, maxTokens: 128000, input: ['text'], reasoningEfforts: [] });
-    const blank = () => ({ displayName: '', baseURL: '', apiKeyEnv: '', transport: 'auto', requestFormat: 'standard', reuseConnection: true, continuation: true, fallbackAfterFailures: 5, fallbackCooldownMs: 300000, models: [], discover: false, discovery: { contextWindow: 500000, maxTokens: 128000, input: ['text', 'image'], reasoningEfforts: ['high', 'xhigh', 'max'], exclude: [], ttlMs: 300000, timeoutMs: 10000 } });
+    const blank = () => ({ displayName: '', baseURL: '', apiKeyEnv: '', transport: 'auto', requestFormat: 'standard', clientMetadata: 'off', reuseConnection: true, continuation: true, fallbackAfterFailures: 5, fallbackCooldownMs: 300000, models: [], discover: false, discovery: { contextWindow: 500000, maxTokens: 128000, input: ['text', 'image'], reasoningEfforts: ['high', 'xhigh', 'max'], exclude: [], ttlMs: 300000, timeoutMs: 10000 } });
     const failureLabel = {
       conflict: 'conflict', 'route-conflict': 'routeConflict', 'source-changed': 'importSourceChanged',
       'endpoint-mismatch': 'importEndpointMismatch', 'model-conflict': 'importModelConflict',
@@ -359,6 +359,10 @@ window.__ModuleLoader__.load({
             h('select', { value: data.requestFormat ?? 'standard', disabled: locked, onChange: e => change('requestFormat', e.target.value) },
               h('option', { value: 'standard' }, t('requestFormatStandard')), h('option', { value: 'codex' }, t('requestFormatCodex')),
               h('option', { value: 'codex-instructions' }, t('requestFormatCodexInstructions')))),
+          h('label', { className: 'ws-field' }, h('span', null, t('clientMetadata')),
+            h('select', { value: data.clientMetadata ?? 'off', disabled: locked, onChange: e => change('clientMetadata', e.target.value) },
+              h('option', { value: 'off' }, t('clientMetadataOff')), h('option', { value: 'codex' }, t('clientMetadataCodex')))),
+          h('p', { className: 'ws-small' }, t('clientMetadataHelp')),
           h('div', { className: 'ws-grid' },
             toggle('reuseConnection', data.reuseConnection, value => change('reuseConnection', value), data.transport === 'sse', 'reuseHint'),
             toggle('continuation', data.continuation, value => change('continuation', value), data.transport === 'sse' || !data.reuseConnection, 'deltaHint')),

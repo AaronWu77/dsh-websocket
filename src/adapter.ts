@@ -271,7 +271,8 @@ export class GatewayAdapter extends LlmAdapter {
       state.route = route
       state.mode = mode
       state.transport = new ResponsesTransport({
-        mode, requestFormat: cfg.requestFormat, baseURL: cfg.baseURL, apiKey: options.apiKey,
+        mode, requestFormat: cfg.requestFormat, clientMetadata: cfg.clientMetadata, sessionId: state.options?.sessionId,
+        baseURL: cfg.baseURL, apiKey: options.apiKey,
         signal: options.signal ?? this.lifetime.signal, callerSignal: state.options?.signal,
         connectTimeoutMs: cfg.websocketConnectTimeoutMs, closeTimeoutMs: cfg.closeTimeoutMs,
         maxFrameBytes: cfg.maxFrameBytes, maxBufferedEvents: cfg.maxBufferedEvents,
@@ -440,7 +441,7 @@ export class GatewayAdapter extends LlmAdapter {
       }
     } catch (error: unknown) {
       if (state.transport?.outcomeUnknown && !options.signal?.aborted) {
-        throw new LlmError('The gateway generation outcome is unknown. Check provider usage before retrying.', 'OUTCOME_UNKNOWN', { cause: error })
+        throw LlmError.fromFailure({ code: 'OUTCOME_UNKNOWN', message: 'The gateway generation outcome is unknown. Check provider usage before retrying.' }, { cause: error })
       }
       throw error
     } finally {

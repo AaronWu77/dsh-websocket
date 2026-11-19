@@ -1,0 +1,5 @@
+- insert:
+    - id: dsh-websocket
+      name: dsh-websocket
+      config:
+        providers: {}

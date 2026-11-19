@@ -1,0 +1,91 @@
+{
+  "name": "dsh-websocket",
+  "displayName": "dsh-Websocket",
+  "version": "0.4.0-local.5",
+  "private": true,
+  "description": "GPT Responses gateways with session WebSocket continuation, safe SSE recovery and live settings.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AaronWu77/dsh-websocket.git"
+  },
+  "homepage": "https://github.com/AaronWu77/dsh-websocket",
+  "bugs": {
+    "url": "https://github.com/AaronWu77/dsh-websocket/issues"
+  },
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": "0.2.2-rc.1"
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
+    "build:check": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:profile": "tsx tests/support/run-gateway-headless.ts",
+    "test:lifecycle": "tsx tests/support/run-gateway-lifecycle.ts",
+    "check": "pnpm run build && pnpm run build:check && pnpm test",
+    "check:isolated": "pnpm run check && pnpm run test:profile && pnpm run test:lifecycle"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "openai": "7.19.0",
+    "ws": "8.22.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-attachment": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "link:../../../vendor/cordis",
+    "@deepseek-ai/dsh-attachment": "link:../../../packages/attachment/attachment",
+    "@deepseek-ai/dsh-credentials": "link:../../../packages/credentials/credentials",
+    "@deepseek-ai/dsh-llm": "link:../../../packages/llm/llm",
+    "@deepseek-ai/dsh-llm-pi-ai": "link:../../../packages/llm/llm-pi-ai",
+    "@deepseek-ai/schemastery": "link:../../../vendor/schemastery",
+    "@deepseek-ai/dsh-settings": "link:../../../packages/settings/settings",
+    "@deepseek-ai/dsh-config-editor": "link:../../../packages/boot/config-editor",
+    "@deepseek-ai/dsh-client-connection": "link:../../../packages/client/connection",
+    "@deepseek-ai/dsh-tools": "link:../../../packages/core/tools",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3"
+  }
+}
